@@ -30,27 +30,30 @@ from optparse import OptionParser
 
 class HouseArrestClient(AFCClient):
 
-    def __init__(self, lockdown=None,serviceName="com.apple.mobile.house_arrest", service=None):
-        self.serviceName = serviceName
-        self.lockdown = lockdown if lockdown else LockdownClient()
-        self.service = service if service else self.lockdown.startService(self.serviceName)
+    def __init__(self, udid=None):
+        lockdownClient = LockdownClient(udid)
+        serviceName = "com.apple.mobile.house_arrest"
+        super(HouseArrestClient, self).__init__(lockdownClient, serviceName)
+
 
     def stop_session(self):
         print("Disconecting...")
         self.service.close()
 
-    def send_command(self, applicationId, cmd="VendDocuments"):
+    def send_command(self, applicationId, cmd="VendContainer"):
         self.service.sendPlist({"Command": cmd, "Identifier": applicationId})
         res = self.service.recvPlist()
 
         if res.get("Error"):
             print(res["Error"])
-            return None
+            return False
+        else:
+            return True
 
-    def shell(self,applicationId,cmd="VendDocuments"):
-        res = self.send_command(applicationId, cmd="VendDocuments")
+    def shell(self, applicationId, cmd="VendContainer"):
+        res = self.send_command(applicationId, cmd)
         if res:
-            AFCShell(client=self.service).cmdloop()
+            AFCShell(client=self).cmdloop()
 
 
 if __name__ == "__main__":
@@ -63,9 +66,9 @@ if __name__ == "__main__":
     (options, args) = parser.parse_args()
     h = HouseArrestClient()
     if options.cmd:
-        h.shell(options.applicationId)
-    else:
         h.shell(options.applicationId, cmd=options.cmd)
+    else:
+        h.shell(options.applicationId)
 
 
 
