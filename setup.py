@@ -65,7 +65,7 @@ if __name__ == "__main__":
         cmdclass={},
         packages=find_packages(),
         package_data={'':['*.txt', '*.TXT'], },
-        data_files=[(".", ["requirements.txt"])],
+        data_files=[(".", ["requirements.txt", "version.txt"])],
         author="QTA",
         license="Copyright(c)2010-2018 Tencent All Rights Reserved. ",
         install_requires=parse_requirements(),
