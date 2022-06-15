@@ -124,6 +124,7 @@ class BinaryProtocol(object):
 		payload = self._unpack(resp, body[0xc:])
 		return (resp, tag, payload)
 
+
 class PlistProtocol(BinaryProtocol):
 	TYPE_RESULT = "Result"
 	TYPE_CONNECT = "Connect"
@@ -272,8 +273,58 @@ class UsbmuxdClient(MuxConnection):
 			pair_record = plistlib.loads(pair_record)
 		else:
 			pair_record = data['PairRecordData'].data
-			pair_record = plistlib.readPlistFromString(pair_record)
+			try:
+				pair_record = plistlib.readPlistFromString(pair_record)
+			except Exception:
+				pair_record = self.parse_pair_record(pair_record)
 		return pair_record
+
+	def parse_pair_record(self, pair_record):
+		import re
+		desc = {}
+		system_buid = r".*?SystemBUID.*?(\w{8}\-\w{4}\-\w{4}\-\w{4}\-\w{12}).*"
+		wifi_mac_addr = r".*?WiFiMACAddress.*?(\w{2}\:\w{2}\:\w{2}\:\w{2}\:\w{2}\:\w{2}).*"
+		host_id = r".*?HostID.*?(\w{8}\-\w{4}\-\w{4}\-\w{4}\-\w{12}).*"
+		EscrowBag = r".*?EscrowBag.+?(.*?)\^"
+		content = re.findall(system_buid, pair_record)
+		if content:
+			desc["SystemBUID"] = content[0]
+		wifi_mac_addr = re.findall(wifi_mac_addr, pair_record)
+		if wifi_mac_addr:
+			desc["WiFiMACAddress"] = wifi_mac_addr[0]
+		host_id = re.findall(host_id, pair_record)
+		if host_id:
+			desc["HostID"] = host_id[0]
+		EscrowBag = re.findall(EscrowBag, pair_record)
+		if EscrowBag:
+			desc["EscrowBag"] = EscrowBag[0]
+
+		in_func = False
+		for line in pair_record.split("\n"):
+			if "DeviceCertificate" in line and not in_func:
+				in_func = "DeviceCertificate"
+				desc["DeviceCertificate"] = "-----BEGIN CERTIFICATE-----\n"
+			elif "HostCertificate" in line and not in_func:
+				in_func = "HostCertificate"
+				desc["HostCertificate"] = "-----BEGIN CERTIFICATE-----\n"
+			elif "HostPrivateKey" in line and not in_func:
+				in_func = "HostPrivateKey"
+				desc["HostPrivateKey"] = "-----BEGIN PRIVATE KEY-----\n"
+			elif "RootCertificate" in line and not in_func:
+				in_func = "RootCertificate"
+				desc["RootCertificate"] = "-----BEGIN CERTIFICATE-----\n"
+			elif "RootPrivateKey" in line and not in_func:
+				in_func = "RootPrivateKey"
+				desc["RootPrivateKey"] = "-----BEGIN PRIVATE KEY-----\n"
+			elif "-----END" in line and in_func:
+				desc[in_func] += line + "\n"
+				in_func = False
+			elif in_func:
+				desc[in_func] += line + "\n"
+		for key in desc:
+			if "PrivateKey" in key or "Certificate" in key or "EscrowBag" in key:
+				desc[key] = plistlib.Data(desc[key])
+		return desc
 
 
 if __name__ == "__main__":
