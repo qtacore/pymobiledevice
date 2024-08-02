@@ -289,15 +289,15 @@ class USBMux(object):
             else:
                 socketpath = "/var/run/usbmuxd"
         self.socketpath = socketpath
-        self.listener = MuxConnection(socketpath, BinaryProtocol)
+        self.listener = MuxConnection(socketpath, PlistProtocol)
         try:
             self.listener.listen()
             self.version = 0
-            self.protoclass = BinaryProtocol
-        except MuxVersionError:
-            self.listener = MuxConnection(socketpath, PlistProtocol)
-            self.listener.listen()
             self.protoclass = PlistProtocol
+        except MuxVersionError:
+            self.listener = MuxConnection(socketpath, BinaryProtocol)
+            self.listener.listen()
+            self.protoclass = BinaryProtocol
             self.version = 1
         self.devices = self.listener.devices
 
