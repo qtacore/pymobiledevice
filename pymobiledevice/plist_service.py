@@ -73,8 +73,10 @@ class PlistService(object):
     def send(self, data):
         try:
             self.s.send(data)
-        except:
-            print("Sending data to device failled")
+        except Exception as e:
+            import traceback
+            print("Sending data to device failled: ", e)
+            print(traceback.format_exc())
             return -1
         return 0
 
@@ -135,4 +137,10 @@ class PlistService(object):
         return self.send(l + payload)
 
     def ssl_start(self, keyfile, certfile):
+        self._socket_back = self.s
         self.s = ssl.wrap_socket(self.s, keyfile, certfile, ssl_version=ssl.PROTOCOL_TLSv1)
+
+    def ssl_stop(self):
+        self.s.close()
+        self.s = self._socket_back
+        self._socket_back = None

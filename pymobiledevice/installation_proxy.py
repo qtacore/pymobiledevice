@@ -126,6 +126,10 @@ class installation_proxy(object):
         return [app for app in self.apps_info().values()
                 if app.get("ApplicationType") in appTypes]
 
+    def find_bundle_id(self, bundle_id):
+        for app in self.get_apps():
+            if app.get('CFBundleIdentifier') == bundle_id:
+                return app
 
     def print_apps(self, appType=["User"]):
         for app in self.get_apps(appType):

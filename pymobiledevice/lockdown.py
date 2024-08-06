@@ -309,6 +309,15 @@ class LockdownClient(object):
         plist_service = PlistService(startService.get("Port"), self.udid)
         if ssl_enabled:
             plist_service.ssl_start(self.sslfile, self.sslfile)
+
+        ssl_dial_only = False
+        if name in ("com.apple.instruments.remoteserver",
+                    "com.apple.accessibility.axAuditDaemon.remoteserver",
+                    "com.apple.testmanagerd.lockdown",
+                    "com.apple.debugserver"):
+            ssl_dial_only = True
+        if ssl_dial_only:
+            plist_service.ssl_stop()
         return plist_service
 
     def startServiceWithEscrowBag(self, name, escrowBag=None):
@@ -335,8 +344,9 @@ class LockdownClient(object):
 
 if __name__ == "__main__":
     l = LockdownClient()
-    if l:
-        n = writeHomeFile(HOMEFOLDER, "%s_infos.plist" % l.udid, plistlib.writePlistToString(l.allValues))
-        print("Wrote infos to %s" % n)
-    else:
-        print("Unable to connect to device")
+    # if l:
+    #     n = writeHomeFile(HOMEFOLDER, "%s_infos.plist" % l.udid, plistlib.writePlistToString(l.allValues))
+    #     print("Wrote infos to %s" % n)
+    # else:
+    #     print("Unable to connect to device")
+    print(l.getValue())
