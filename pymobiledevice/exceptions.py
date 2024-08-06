@@ -52,6 +52,10 @@ class MuxError(PyiOSDeviceException):
     pass
 
 
+class ServiceError(MuxError):
+    pass
+
+
 class MuxVersionError(MuxError):
     pass
 

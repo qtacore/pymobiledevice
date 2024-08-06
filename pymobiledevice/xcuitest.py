@@ -4,214 +4,475 @@ import logging
 import os
 import threading
 import time
+import uuid
+import dataclasses
+from dataclasses import dataclass
+import typing
+from typing import Iterator, Optional, Union
 from distutils.version import LooseVersion
 
+from . import bplist, plistlib2
 from .dtx import DTXEnum
 from .installation_proxy import installation_proxy as InstallationProxy
-from .instruments import InstrumentServer
 from .house_arrest import HouseArrestService
 from .testmanagerd import TestManagerdLockdown
 from .bpylist2 import archive, XCTestConfiguration, NSURL, NSUUID
 from .dtx_msg import RawObj
 from .lockdown import LockdownClient
+from .instruments import DTXService
+from .instruments import (AUXMessageBuffer, DTXMessage, DTXPayload, DTXService, Event,
+                           ServiceInstruments)
+from .exceptions import MuxError
+from .installation_proxy import installation_proxy as InstallationProxy
 
-logging.basicConfig(level=logging.INFO)
+
+_T = typing.TypeVar("_T")
+
+logger = logging.getLogger("pymobiledevice.xcuitest")
+logger.setLevel(level=logging.DEBUG)
 
 
-class RunXCUITest(threading.Thread):
-    def __init__(self, bundle_id, udid=None):
-        super().__init__()
-        self.udid = udid
-        self.bundle_id = bundle_id
-        self.quit_event = threading.Event()
+def alias_field(name: str) -> dataclasses.Field:
+    return dataclasses.field(metadata={"alias": name})
 
-    def close(self):
-        self.quit_event.set()
 
-    def run(self) -> None:
-        def _callback(res):
-            logging.info(f"UNDEFINED {res.selector} : {res.auxiliaries}")
 
-        self.lockdown = LockdownClient(udid=self.udid)
-        installation = InstallationProxy(lockdown=self.lockdown)
-        app_info = installation.find_bundle_id(self.bundle_id)
-        sign_identity = app_info.get("SignerIdentity", "")
-        logging.info("BundleID: %s", self.bundle_id)
-        logging.info("SignIdentity: %r", sign_identity)
+class _BaseInfo:
 
-        XCODE_VERSION = 29
-        session_identifier = NSUUID(bytes=os.urandom(16), version=4)
-        tm1 = TestManagerdLockdown(self.lockdown).init()
+    def _asdict(self) -> dict:
+        """ for simplejson """
+        return self.__dict__.copy()
 
-        channel = "dtxproxy:XCTestManager_IDEInterface:XCTestManager_DaemonConnectionInterface"
-        tm1.make_channel(channel)
-        if self.lockdown.ios_version > LooseVersion('11.0'):
-            tm1.call(channel, "_IDE_initiateControlSessionWithProtocolVersion:", RawObj(XCODE_VERSION))
-        tm1.register_selector_callback(DTXEnum.FINISHED, lambda _: self.quit_event.set())
-        # tm1.register_undefined_callback(_callback)
+    @classmethod
+    def from_json(cls: _T, data: dict) -> _T:
+        kwargs = {}
+        for field in dataclasses.fields(cls):
+            possible_names = [field.name]
+            if "alias" in field.metadata:
+                possible_names.append(field.metadata["alias"])
+            for name in possible_names:
+                if name in data:
+                    value = data[name]
+                    if field.type != type(value):
+                        value = field.type(value)
+                    kwargs[field.name] = value
+                    break
+        return cls(**kwargs)
 
-        tm2 = TestManagerdLockdown(self.lockdown).init()
-        tm2.make_channel(channel)
-        tm2.register_selector_callback(DTXEnum.FINISHED, lambda _: self.quit_event.set())
-        # tm2.register_undefined_callback(_callback)
+    def __repr__(self) -> str:
+        attrs = []
+        for k, v in self.__dict__.items():
+            attrs.append(f"{k}={v!r}")
+        return f"<{self.__class__.__name__} " + ", ".join(attrs) + ">"
 
-        _start_flag = threading.Event()
 
-        def _start_executing(res=None):
-            if _start_flag.is_set():
-                return
-            _start_flag.set()
+@dataclass(frozen=True)
+class XCTestResult(_BaseInfo):
+    """Representing the XCTest result printed at the end of test.
 
-            logging.info("Start execute test plan with IDE version: %d", XCODE_VERSION)
-            tm2._call(False, 0xFFFFFFFF, '_IDE_startExecutingTestPlanWithProtocolVersion:', RawObj(XCODE_VERSION))
+    At the end of an XCTest, the test process will print following information:
 
-        def _show_log_message(res):
-            logging.info(f"LogMessage: {res.auxiliaries}")
-            if 'Received test runner ready reply' in ''.join(res.auxiliaries):
-                _start_executing()
+        Test Suite 'MoblySignInTests' passed at 2023-09-03 16:35:39.214.
+                Executed 1 test, with 0 failures (0 unexpected) in 3.850 (3.864) seconds
+        Test Suite 'MoblySignInTests.xctest' passed at 2023-09-03 16:35:39.216.
+                 Executed 1 test, with 0 failures (0 unexpected) in 3.850 (3.866) seconds
+        Test Suite 'Selected tests' passed at 2023-09-03 16:35:39.217.
+                 Executed 1 test, with 0 failures (0 unexpected) in 3.850 (3.869) seconds
+    """
 
-        xctest_content = archive(XCTestConfiguration({
-            "testBundleURL": NSURL(None, "file://" + app_info['Path'] + "/PlugIns/XCTestAgent.xctest"),
-            "sessionIdentifier": session_identifier,
-            "targetApplicationBundleID": app_info['CFBundleIdentifier'],
-            "targetApplicationPath": app_info['Path'],
-        }))
+    MESSAGE = (
+        "Test Suite '{test_suite_name}' passed at {end_time}.\n"
+        "\t Executed {run_count} test, with {failure_count} failures ({unexpected_count} unexpected) in {test_duration:.3f} ({total_duration:.3f}) seconds"
+    )
 
-        def _ready_with_caps_callback(m):
-            tm2.send_dtx_message(
-                m.channel_code,
-                m.identifier,
-                0x3,
-                xctest_content,
-                expects_reply=True
-            )
+    test_suite_name: str = alias_field('TestSuiteName')
+    end_time: str = alias_field('EndTime')
+    run_count: int = alias_field('RunCount')
+    failure_count: int = alias_field('FailureCount')
+    unexpected_count: int = alias_field('UnexpectedCount')
+    test_duration: float = alias_field('TestDuration')
+    total_duration: float = alias_field('TotalDuration')
 
-        tm2.register_selector_callback('_XCT_testBundleReadyWithProtocolVersion:minimumVersion:', _start_executing)
-        tm2.register_selector_callback('_XCT_logDebugMessage:', _show_log_message)
-        tm2.register_selector_callback('_XCT_didFinishExecutingTestPlan', lambda _: self.quit_event.set())
-        tm2.register_selector_callback('_XCT_testRunnerReadyWithCapabilities:', _ready_with_caps_callback)
-
-        tm2.call(
-            channel,
-            '_IDE_initiateSessionWithIdentifier:forClient:atPath:protocolVersion:',
-            RawObj(session_identifier),
-            str(session_identifier) + '-6722-000247F15966B083',
-            '/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild',
-            RawObj(XCODE_VERSION),
+    def __repr__(self) -> str:
+        return self.MESSAGE.format(
+            test_suite_name=self.test_suite_name, end_time=self.end_time,
+            run_count=self.run_count, failure_count=self.failure_count,
+            unexpected_count=self.unexpected_count,
+            test_duration=self.test_duration,
+            total_duration=self.total_duration,
         )
 
-        # launch_wda
-        xctest_path = "/tmp/XCTestAgent-" + str(session_identifier).upper() + ".xctestconfiguration"
 
-        fsync = HouseArrestService(self.lockdown)
-        fsync.send_command(self.bundle_id)
+class XCUITestRunner(object):
+    def __init__(self, lockdown=None):
+        self._lockdown = lockdown if lockdown else LockdownClient()
+        self._installation = InstallationProxy(self._lockdown)
+
+    def get_value(self, key: str = '', domain: str = "", no_session: bool = False):
+        """ key can be: ProductVersion
+        Args:
+            domain (str): com.apple.disk_usage
+            no_session: set to True when not paired
+        """
+        return self._lockdown.getValue(domain, key)
+
+    def _connect_testmanagerd_lockdown(self) -> DTXService:
+        if self.major_version() >= 14:
+            conn = self._lockdown.startService("com.apple.testmanagerd.lockdown.secure")
+        else:
+            conn = self._lockdown.startService("com.apple.testmanagerd.lockdown")
+        return DTXService(conn)
+
+    def _launch_wda_app(self,
+                    bundle_id: str,
+                    session_identifier: uuid.UUID,
+                    xctest_configuration: bplist.XCTestConfiguration,
+                    quit_event: threading.Event = None,
+                    test_runner_env: Optional[dict] = None,
+                    test_runner_args: Optional[list] = None
+                ) -> typing.Tuple[ServiceInstruments, int]:  # pid
+        app_info = self._installation.find_bundle_id(bundle_id)
+        sign_identity = app_info.get("SignerIdentity", "")
+        logger.info("SignIdentity: %r", sign_identity)
+
+        app_container = app_info['Container']
+
+        # CFBundleName always endswith -Runner
+        exec_name = app_info['CFBundleExecutable']
+        logger.info("CFBundleExecutable: %s", exec_name)
+        assert exec_name.endswith("-Runner"), "Invalid CFBundleExecutable: %s" % exec_name
+        target_name = exec_name[:-len("-Runner")]
+
+        xctest_path = f"/tmp/{target_name}-{str(session_identifier).upper()}.xctestconfiguration"  # yapf: disable
+        xctest_content = bplist.objc_encode(xctest_configuration)
+
+        # fsync = self.app_sync(bundle_id, command="VendContainer")
+        # for fname in fsync.listdir("/tmp"):
+        #     if fname.endswith(".xctestconfiguration"):
+        #         logger.debug("remove /tmp/%s", fname)
+        #         fsync.remove("/tmp/" + fname)
+        # fsync.push_content(xctest_path, xctest_content)
+
+        fsync = HouseArrestService(self._lockdown)
+        fsync.send_command(bundle_id)
         for fname in fsync.read_directory("/tmp"):
             if fname.endswith(".xctestconfiguration"):
                 logging.debug("remove /tmp/%s", fname)
                 fsync.file_remove("/tmp/" + fname)
         fsync.set_file_contents(xctest_path, xctest_content)
 
-        conn = InstrumentServer(self.lockdown).init()
-        conn.call('com.apple.instruments.server.services.processcontrol', 'processIdentifierForBundleIdentifier:', self.bundle_id)
+        # service: com.apple.instruments.remoteserver
+        conn = ServiceInstruments(self._lockdown)
+        channel = conn.make_channel("com.apple.instruments.server.services.processcontrol")
 
-        # conn.register_undefined_callback(_callback)
+        conn.call_message(channel, "processIdentifierForBundleIdentifier:", [bundle_id])
+        # launch app
+        identifier = "launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:"
         app_path = app_info['Path']
-        app_container = app_info['Container']
 
-        xctestconfiguration_path = app_container + xctest_path
-        logging.info("AppPath: %s", app_path)
-        logging.info("AppContainer: %s", app_container)
-
+        xctestconfiguration_path = app_container + xctest_path  # xctest_path="/tmp/WebDriverAgentRunner-" + str(session_identifier).upper() + ".xctestconfiguration"
+        logger.debug("AppPath: %s", app_path)
+        logger.debug("AppContainer: %s", app_container)
         app_env = {
             'CA_ASSERT_MAIN_THREAD_TRANSACTIONS': '0',
             'CA_DEBUG_TRANSACTIONS': '0',
             'DYLD_FRAMEWORK_PATH': app_path + '/Frameworks:',
             'DYLD_LIBRARY_PATH': app_path + '/Frameworks',
+            'MTC_CRASH_ON_REPORT': '1',
             'NSUnbufferedIO': 'YES',
             'SQLITE_ENABLE_THREAD_ASSERTIONS': '1',
             'WDA_PRODUCT_BUNDLE_IDENTIFIER': '',
+            'XCTestBundlePath': f"{app_info['Path']}/PlugIns/{target_name}.xctest",
             'XCTestConfigurationFilePath': xctestconfiguration_path,
             'XCODE_DBG_XPC_EXCLUSIONS': 'com.apple.dt.xctestSymbolicator',
             'MJPEG_SERVER_PORT': '',
             'USE_PORT': '',
-        }
-        if self.lockdown.ios_version > LooseVersion('11.0'):
+            # maybe no needed
+            'LLVM_PROFILE_FILE': app_container + "/tmp/%p.profraw", # %p means pid
+        } # yapf: disable
+        if test_runner_env:
+            app_env.update(test_runner_env)
+
+        if self.major_version() >= 11:
             app_env['DYLD_INSERT_LIBRARIES'] = '/Developer/usr/lib/libMainThreadChecker.dylib'
             app_env['OS_ACTIVITY_DT_MODE'] = 'YES'
-        app_options = {'StartSuspendedKey': False}
-        if self.lockdown.ios_version > LooseVersion('12.0'):
-            app_options['ActivateSuspended'] = True
 
         app_args = [
             '-NSTreatUnknownArgumentsAsOpen', 'NO',
             '-ApplePersistenceIgnoreState', 'YES'
         ]
+        app_args.extend(test_runner_args or [])
+        app_options = {'StartSuspendedKey': False}
+        if self.major_version() >= 12:
+            app_options['ActivateSuspended'] = True
 
-        identifier = "launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:"
-
-        pid = conn.call('com.apple.instruments.server.services.processcontrol', identifier,
-                        app_path, self.bundle_id, app_env, app_args, app_options).selector
+        pid = conn.call_message(
+            channel, identifier,
+            [app_path, bundle_id, app_env, app_args, app_options])
         if not isinstance(pid, int):
-            logging.error(f"Launch failed: {pid}")
-            raise Exception("Launch failed")
+            logger.error("Launch failed: %s", pid)
+            raise MuxError("Launch failed")
 
-        logging.info(f"Launch {self.bundle_id} pid: {pid}")
+        logger.info("Launch %r pid: %d", bundle_id, pid)
+        aux = AUXMessageBuffer()
+        aux.append_obj(pid)
+        conn.call_message(channel, "startObservingPid:", aux)
 
-        conn.call('com.apple.instruments.server.services.processcontrol', "startObservingPid:", RawObj(pid))
-
-        def _new_callback(m):
+        def _callback(m: DTXMessage):
+            # logger.info("output: %s", m.result)
             if m is None:
-                print("WebDriverAgentRunner quitted")
+                logger.warning("WebDriverAgentRunner quitted")
                 return
             if m.flags == 0x02:
                 method, args = m.result
                 if method == 'outputReceived:fromProcess:atTime:':
                     # logger.info("Output: %s", args[0].strip())
-                    print("logProcess: %s", args[0].rstrip())
+                    logger.debug("logProcess: %s", args[0].rstrip())
                     # XCTestOutputBarrier is just ouput separators, no need to
                     # print them in the logs.
                     if args[0].rstrip() != 'XCTestOutputBarrier':
-                        print('%s', args[0].rstrip())
+                        logger.debug('%s', args[0].rstrip())
                     # In low iOS versions, 'Using singleton test manager' may not be printed... mark wda launch status = True if server url has been printed
                     if "ServerURLHere" in args[0]:
-                        print("%s", args[0].rstrip())
-                        print("WebDriverAgent start successfully")
+                        logger.info("%s", args[0].rstrip())
+                        logger.info("WebDriverAgent start successfully")
 
-        conn.register_selector_callback(DTXEnum.NOTIFICATION, _new_callback)
-        conn.register_selector_callback("_XCT_logDebugMessage:", _show_log_message)
+        def _log_message_callback(m: DTXMessage):
+            identifier, args = m.result
+            logger.debug("logConsole: %s", args)
+            if isinstance(args, (tuple, list)):
+                for msg in args:
+                    msg = msg.rstrip() if isinstance(msg, str) else msg
+                    logger.debug('%s', msg)
+            else:
+                logger.debug('%s', args)
 
-        print("before quit event callback")
-        if self.quit_event:
-            conn.register_selector_callback(DTXEnum.FINISHED, lambda _: self.quit_event.set())
+        conn.register_callback("_XCT_logDebugMessage:", _log_message_callback)
+        conn.register_callback(Event.NOTIFICATION, _callback)
+        if quit_event:
+            conn.register_callback(Event.FINISHED, lambda _: quit_event.set())
+        return conn, pid
 
-        print("preparing sending")
-        if self.lockdown.ios_version >= LooseVersion('12.0'):
+    def major_version(self) -> int:
+        version = self.get_value("ProductVersion")
+        return int(version.split(".")[0])
+
+    def _gen_xctest_configuration(self,
+                                        app_info: dict,
+                                        session_identifier: uuid.UUID,
+                                        target_app_bundle_id: str = None,
+                                        target_app_env: Optional[dict] = None,
+                                        target_app_args: Optional[list] = None,
+                                        tests_to_run: Optional[set] = None) -> bplist.XCTestConfiguration:
+        # CFBundleName always endswith -Runner
+        exec_name: str = app_info['CFBundleExecutable']
+        assert exec_name.endswith("-Runner"), "Invalid CFBundleExecutable: %s" % exec_name
+        target_name = exec_name[:-len("-Runner")]
+
+        # xctest_path = f"/tmp/{target_name}-{str(session_identifier).upper()}.xctestconfiguration"  # yapf: disable
+        return bplist.XCTestConfiguration({
+            "testBundleURL": bplist.NSURL(None, f"file://{app_info['Path']}/PlugIns/{target_name}.xctest"),
+            "sessionIdentifier": session_identifier,
+            "targetApplicationBundleID": target_app_bundle_id,
+            "targetApplicationArguments": target_app_args or [],
+            "targetApplicationEnvironment": target_app_env or {},
+            "testsToRun": tests_to_run or set(),  # We can use "set()" or "None" as default value, but "{}" won't work because the decoding process regards "{}" as a dictionary.
+            "testsMustRunOnMainThread": True,
+            "reportResultsToIDE": True,
+            "reportActivities": True,
+            "automationFrameworkPath": "/Developer/Library/PrivateFrameworks/XCTAutomationSupport.framework",
+        })  # yapf: disable
+
+    def xcuitest(self, bundle_id, target_bundle_id=None,
+                    test_runner_env: dict={},
+                    test_runner_args: Optional[list]=None,
+                    target_app_env: Optional[dict]=None,
+                    target_app_args: Optional[list]=None,
+                    tests_to_run: Optional[set]=None):
+        """
+        Launch xctrunner and wait until quit
+
+        Args:
+            bundle_id (str): xctrunner bundle id
+            target_bundle_id (str): optional, launch WDA-UITests will not need it
+            test_runner_env (dict[str, str]): optional, the environment variables to be passed to the test runner
+            test_runner_args (list[str]): optional, the command line arguments to be passed to the test runner
+            target_app_env (dict[str, str]): optional, the environmen variables to be passed to the target app
+            target_app_args (list[str]): optional, the command line arguments to be passed to the target app
+            tests_to_run (set[str]): optional, the specific test classes or test methods to run
+        """
+        product_version = self.get_value("ProductVersion")
+        logger.info("ProductVersion: %s", product_version)
+        logger.info("UDID: %s", self._lockdown.udid)
+
+        XCODE_VERSION = 29
+        session_identifier = uuid.uuid4()
+
+        # when connections closes, this event will be set
+        quit_event = threading.Event()
+
+        ##
+        ## IDE 1st connection
+        x1 = self._connect_testmanagerd_lockdown()
+
+        # index: 427
+        x1_daemon_chan = x1.make_channel(
+            'dtxproxy:XCTestManager_IDEInterface:XCTestManager_DaemonConnectionInterface'
+        )
+
+        if self.major_version() >= 11:
+            identifier = '_IDE_initiateControlSessionWithProtocolVersion:'
+            aux = AUXMessageBuffer()
+            aux.append_obj(XCODE_VERSION)
+            x1.call_message(x1_daemon_chan, identifier, aux)
+        x1.register_callback(Event.FINISHED, lambda _: quit_event.set())
+
+        ##
+        ## IDE 2nd connection
+        x2 = self._connect_testmanagerd_lockdown()
+        x2_deamon_chan = x2.make_channel(
+            'dtxproxy:XCTestManager_IDEInterface:XCTestManager_DaemonConnectionInterface'
+        )
+        x2.register_callback(Event.FINISHED, lambda _: quit_event.set())
+        #x2.register_callback("pidDiedCallback:" # maybe no needed
+
+        _start_flag = threading.Event()
+
+        def _start_executing(m: Optional[DTXMessage] = None):
+            if _start_flag.is_set():
+                return
+            _start_flag.set()
+
+            logger.info("Start execute test plan with IDE version: %d",
+                        XCODE_VERSION)
+            x2.call_message(0xFFFFFFFF, '_IDE_startExecutingTestPlanWithProtocolVersion:', [XCODE_VERSION], expects_reply=False)
+
+        def _show_log_message(m: DTXMessage):
+            logger.debug("logMessage: %s", m.result[1])
+            if 'Received test runner ready reply' in ''.join(
+                    m.result[1]):
+                logger.info("Test runner ready detected")
+                _start_executing()
+
+            if isinstance(m.result[1], (tuple, list)):
+                for msg in m.result[1]:
+                    msg = msg.rstrip() if isinstance(msg, str) else msg
+                    logger.debug('%s', msg)
+            else:
+                logger.debug('%s', m.result[1])
+
+        test_results = []
+        test_results_lock = threading.Lock()
+
+        def _record_test_result_callback(m: DTXMessage):
+            result = None
+            if isinstance(m.result, (tuple, list)) and len(m.result) >= 1:
+                if isinstance(m.result[1], (tuple, list)):
+                    try:
+                        result = XCTestResult(*m.result[1])
+                    except TypeError:
+                        pass
+            if not result:
+                logger.warning('Ignore unknown test result message: %s', m)
+                return
+            with test_results_lock:
+                test_results.append(result)
+
+        x2.register_callback(
+            '_XCT_testBundleReadyWithProtocolVersion:minimumVersion:',
+            _start_executing)  # This only happends <= iOS 13
+        x2.register_callback('_XCT_logDebugMessage:', _show_log_message)
+        x2.register_callback(
+            "_XCT_testSuite:didFinishAt:runCount:withFailures:unexpected:testDuration:totalDuration:",
+            _record_test_result_callback)
+
+        app_info = self._installation.find_bundle_id(bundle_id)
+        xctest_configuration = self._gen_xctest_configuration(app_info, session_identifier, target_bundle_id, target_app_env, target_app_args, tests_to_run)
+
+        def _ready_with_caps_callback(m: DTXMessage):
+            x2.send_dtx_message(m.channel_id,
+                                payload=DTXPayload.build_other(0x03, xctest_configuration),
+                                message_id=m.message_id)
+
+        x2.register_callback('_XCT_testRunnerReadyWithCapabilities:', _ready_with_caps_callback)
+
+        # index: 469
+        identifier = '_IDE_initiateSessionWithIdentifier:forClient:atPath:protocolVersion:'
+        aux = AUXMessageBuffer()
+        aux.append_obj(session_identifier)
+        aux.append_obj(str(session_identifier) + '-6722-000247F15966B083')
+        aux.append_obj(
+            '/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild')
+        aux.append_obj(XCODE_VERSION)
+        result = x2.call_message(x2_deamon_chan, identifier, aux)
+        if "NSError" in str(result):
+            raise RuntimeError("Xcode Invocation Failed: {}".format(result))
+
+        # launch test app
+        # index: 1540
+        # xclogger = setup_logger(name='xcuitest')
+        _, pid = self._launch_wda_app(
+            bundle_id,
+            session_identifier,
+            xctest_configuration=xctest_configuration,
+            test_runner_env=test_runner_env,
+            test_runner_args=test_runner_args)
+
+        # xcode call the following commented method, twice
+        # but it seems can be ignored
+
+        # identifier = '_IDE_collectNewCrashReportsInDirectories:matchingProcessNames:'
+        # aux = AUXMessageBuffer()
+        # aux.append_obj(['/var/mobile/Library/Logs/CrashReporter/'])
+        # aux.append_obj(['SpringBoard', 'backboardd', 'xctest'])
+        # result = x1.call_message(chan, identifier, aux)
+        # logger.debug("result: %s", result)
+
+        # identifier = '_IDE_collectNewCrashReportsInDirectories:matchingProcessNames:'
+        # aux = AUXMessageBuffer()
+        # aux.append_obj(['/var/mobile/Library/Logs/CrashReporter/'])
+        # aux.append_obj(['SpringBoard', 'backboardd', 'xctest'])
+        # result = x1.call_message(chan, identifier, aux)
+        # logger.debug("result: %s", result)
+
+        # after app launched, operation bellow must be send in 0.1s
+        # or wda will launch failed
+        if self.major_version() >= 12:
             identifier = '_IDE_authorizeTestSessionWithProcessID:'
-            result = tm1.call(
-                'dtxproxy:XCTestManager_IDEInterface:XCTestManager_DaemonConnectionInterface',
-                identifier,
-                RawObj(pid)).selector
-            logging.info("_IDE_authorizeTestSessionWithProcessID: %s", result)
+            aux = AUXMessageBuffer()
+            aux.append_obj(pid)
+            result = x1.call_message(x1_daemon_chan, identifier, aux)
+        elif self.major_version() <= 9:
+            identifier = '_IDE_initiateControlSessionForTestProcessID:'
+            aux = AUXMessageBuffer()
+            aux.append_obj(pid)
+            result = x1.call_message(x1_daemon_chan, identifier, aux)
         else:
             identifier = '_IDE_initiateControlSessionForTestProcessID:protocolVersion:'
-            result = tm1.call(
-                'dtxproxy:XCTestManager_IDEInterface:XCTestManager_DaemonConnectionInterface',
-                identifier,
-                RawObj(pid), RawObj(XCODE_VERSION)).selector
-            logging.info("_IDE_authorizeTestSessionWithProcessID: %s", result)
-        print("sending finished")
+            aux = AUXMessageBuffer()
+            aux.append_obj(pid)
+            aux.append_obj(XCODE_VERSION)
+            result = x1.call_message(x1_daemon_chan, identifier, aux)
 
-        while not self.quit_event.wait(.1):
+        if "NSError" in str(result):
+            raise RuntimeError("Xcode Invocation Failed: {}".format(result))
+
+        # wait for quit
+        # on windows threading.Event.wait can't handle ctrl-c
+        while not quit_event.wait(.1):
             pass
-        logging.warning("xctrunner quited")
-        conn.stop()
-        tm2.stop()
-        tm1.stop()
+
+        test_result_str = "\n".join(map(str, test_results))
+        if any(result.failure_count > 0 for result in test_results):
+                raise RuntimeError(
+                    "Xcode test failed on device with test results:\n"
+                    f"{test_result_str}"
+                )
+
+        logger.info("xctrunner quited with result:\n%s", test_result_str)
 
 
 if __name__ == '__main__':
     bundle_id = 'com.tencent.testsolar.xctagent.xctrunner.xctrunner'
-    xcuitest = RunXCUITest(bundle_id)
-    xcuitest.start()
-    time.sleep(100)
-    xcuitest.close()
+    runner = XCUITestRunner()
+    runner.xcuitest(bundle_id, bundle_id)
