@@ -145,14 +145,12 @@ class installation_proxy(object):
             "ClientOptions": options,
         })
 
-        result = []
         while True:
             data = self.service.recvPlist()
             if data['Status'] == 'Complete':
                 break
             for appinfo in data['CurrentList']:
-                result.append(appinfo)
-        return result
+                yield appinfo
 
     def close(self):
         self.service.close()

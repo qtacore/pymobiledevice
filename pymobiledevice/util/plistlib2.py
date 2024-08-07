@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 r"""
 Copied from Python standard library
 
@@ -52,12 +54,16 @@ import binascii
 import codecs
 import contextlib
 import datetime
-import enum
-from io import BytesIO
+try:
+    import enum
+except ImportError:
+    import enum34 as enum
+from six import BytesIO
 import itertools
 import os
 import re
 import struct
+import six
 from warnings import warn
 from xml.parsers.expat import ParserCreate
 
@@ -231,7 +237,10 @@ def _decode_base64(s):
 # Contents should conform to a subset of ISO 8601
 # (in particular, YYYY '-' MM '-' DD 'T' HH ':' MM ':' SS 'Z'.  Smaller units
 # may be omitted with #  a loss of precision)
-_dateParser = re.compile(r"(?P<year>\d\d\d\d)(?:-(?P<month>\d\d)(?:-(?P<day>\d\d)(?:T(?P<hour>\d\d)(?::(?P<minute>\d\d)(?::(?P<second>\d\d))?)?)?)?)?Z", re.ASCII)
+if six.PY2:
+    _dateParser = re.compile(r"(?P<year>\d\d\d\d)(?:-(?P<month>\d\d)(?:-(?P<day>\d\d)(?:T(?P<hour>\d\d)(?::(?P<minute>\d\d)(?::(?P<second>\d\d))?)?)?)?)?Z")
+else:
+    _dateParser = re.compile(r"(?P<year>\d\d\d\d)(?:-(?P<month>\d\d)(?:-(?P<day>\d\d)(?:T(?P<hour>\d\d)(?::(?P<minute>\d\d)(?::(?P<second>\d\d))?)?)?)?)?Z", re.ASCII)
 
 
 def _date_from_string(s):
@@ -854,7 +863,7 @@ class _BinaryPlistWriter (object):
                 try:
                     self._fp.write(struct.pack('>Bq', 0x13, value))
                 except struct.error:
-                    raise OverflowError(value) from None
+                    raise OverflowError(value)
             elif value < 1 << 8:
                 self._fp.write(struct.pack('>BB', 0x10, value))
             elif value < 1 << 16:
@@ -960,7 +969,7 @@ _FORMATS={
 }
 
 
-def load(fp, *, fmt=None, use_builtin_types=True, dict_type=dict):
+def load(fp, fmt=None, use_builtin_types=True, dict_type=dict):
     """Read a .plist file. 'fp' should be a readable and binary file object.
     Return the unpacked root object (which usually is a dictionary).
     """
@@ -982,7 +991,7 @@ def load(fp, *, fmt=None, use_builtin_types=True, dict_type=dict):
     return p.parse(fp)
 
 
-def loads(value, *, fmt=None, use_builtin_types=True, dict_type=dict):
+def loads(value, fmt=None, use_builtin_types=True, dict_type=dict):
     """Read a .plist file from a bytes object.
     Return the unpacked root object (which usually is a dictionary).
     """
@@ -991,7 +1000,7 @@ def loads(value, *, fmt=None, use_builtin_types=True, dict_type=dict):
         fp, fmt=fmt, use_builtin_types=use_builtin_types, dict_type=dict_type)
 
 
-def dump(value, fp, *, fmt=FMT_XML, sort_keys=True, skipkeys=False):
+def dump(value, fp, fmt=FMT_XML, sort_keys=True, skipkeys=False):
     """Write 'value' to a .plist file. 'fp' should be a writable,
     binary file object.
     """
@@ -1002,7 +1011,7 @@ def dump(value, fp, *, fmt=FMT_XML, sort_keys=True, skipkeys=False):
     writer.write(value)
 
 
-def dumps(value, *, fmt=FMT_XML, skipkeys=False, sort_keys=True):
+def dumps(value, fmt=FMT_XML, skipkeys=False, sort_keys=True):
     """Return a bytes object with the contents for a .plist file.
     """
     fp = BytesIO()

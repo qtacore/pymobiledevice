@@ -1,13 +1,15 @@
+# -*- coding: utf-8 -*-
+
 """
 http://github.com/farcaller/bplist-python/blob/master/bplist.py
 """
+from __future__ import print_function
 import struct
 import plistlib
 import datetime
 import copy
 import uuid
 import pprint
-from typing import Any, Union, List
 from .plistlib2 import (loads, dumps, FMT_BINARY, UID) # yapf: disable
 
 
@@ -283,7 +285,12 @@ class NSIgnore:
 
 class NSBaseObject(object):
     @staticmethod
-    def encode(objects: list, value: Any):
+    def encode(objects, value):
+        """
+        Args:
+            objects (list):
+            value (Any):
+        """
         raise NotImplementedError()
 
 
@@ -302,7 +309,12 @@ class NSError(Exception):
         return str(self)
 
     @staticmethod
-    def decode(objects: list, ns_info: dict):
+    def decode(objects, ns_info):
+        """
+        Args:
+            objects (list):
+            ns_info (dict):
+        """
         code = ns_info['NSCode']
         domain = _parse_object(objects, ns_info['NSDomain'])
         user_info = _parse_object(objects, ns_info['NSUserInfo'])
@@ -325,7 +337,12 @@ class NSNull(NSBaseObject):
         return False
 
     @staticmethod
-    def encode(objects: list, value: Union[int, str]):
+    def encode(objects, value):
+        """
+        Args:
+            objects (list):
+            value (Union[int, str]):
+        """
         ns_info = {}
         objects.append(ns_info)
         ns_info['$class'] = UID(len(objects))
@@ -337,7 +354,12 @@ class NSNull(NSBaseObject):
 
 class NSObject(NSBaseObject):
     @staticmethod
-    def encode(objects: list, value: Union[int, str]):
+    def encode(objects, value):
+        """
+        Args:
+            objects (list):
+            value (Union[int, str]):
+        """
         if not isinstance(value, (int, str)):
             raise ValueError("NSObject not supported encode value", value,
                              type(value))
@@ -346,7 +368,12 @@ class NSObject(NSBaseObject):
 
 class NSSet(NSBaseObject, set):
     @staticmethod
-    def encode(objects, value: set):
+    def encode(objects, value):
+        """
+        Args:
+            objects (list):
+            value (set):
+        """
         ns_objs = []
         ns_info = {
             "NS.objects": ns_objs,
@@ -365,7 +392,12 @@ class NSSet(NSBaseObject, set):
 
 class NSArray(NSBaseObject, list):
     @staticmethod
-    def encode(objects: list, value: List[Any]):
+    def encode(objects, value):
+        """
+        Args:
+            objects (list):
+            value (List[Any]):
+        """
         ns_objs = []
         ns_info = {
             "NS.objects": ns_objs,
@@ -385,7 +417,12 @@ class NSArray(NSBaseObject, list):
 
 class NSDictionary(NSBaseObject, dict):
     @staticmethod
-    def encode(objects: list, value: dict):
+    def encode(objects, value):
+        """
+        Args:
+            objects (list):
+            value (dict):
+        """
         ns_keys = []
         ns_objs = []
 
@@ -448,7 +485,11 @@ class XCTestConfiguration(NSBaseObject):
         'userAttachmentLifetime': 1
     }
 
-    def __init__(self, kv: dict):
+    def __init__(self, kv):
+        """
+        Args:
+            kn (dict):
+        """
         # self._kv = kv
         assert 'testBundleURL' in kv and isinstance(kv['testBundleURL'], NSURL)
         assert 'sessionIdentifier' in kv and isinstance(
@@ -466,12 +507,22 @@ class XCTestConfiguration(NSBaseObject):
     def __eq__(self, other):
         return self._kv == other._kv
 
-    def __setitem__(self, key: str, val: Any):
+    def __setitem__(self, key, val):
+        """
+        Args:
+            key (str):
+            value (Any):
+        """
         assert isinstance(key, str)
         self._kv[key] = val
 
     @staticmethod
-    def encode(objects: list, value):
+    def encode(objects, value):
+        """
+        Args:
+            objects (list):
+            value:
+        """
         ns_info = {}
         objects.append(ns_info)
         ns_info['$class'] = UID(len(objects))
@@ -486,7 +537,12 @@ class XCTestConfiguration(NSBaseObject):
                 ns_info[k] = _encode_any(objects, v)
 
     @staticmethod
-    def decode(objects: list, ns_info: dict):
+    def decode(objects, ns_info):
+        """
+        Args:
+            objects (list):
+            ns_info (dict):
+        """
         info = ns_info.copy()
         info.pop("$class")
         for key in info.keys():
@@ -497,7 +553,11 @@ class XCTestConfiguration(NSBaseObject):
 
 
 class DTActivityTraceTapMessage(NSBaseObject):
-    def __init__(self, tap_message: dict):
+    def __init__(self, tap_message):
+        """
+        Args:
+            tap_message (list):
+        """
         self._tap_message = tap_message
 
     def __str__(self):
@@ -505,20 +565,37 @@ class DTActivityTraceTapMessage(NSBaseObject):
             self._tap_message)
 
     @staticmethod
-    def decode(objects: list, ns_info: dict):
+    def decode(objects, ns_info):
+        """
+        Args:
+            objects (list):
+            ns_info (dict):
+        """
         tap_message = _parse_object(objects, ns_info['DTTapMessagePlist'])
         return DTActivityTraceTapMessage(tap_message)
 
 
 class NSString(NSBaseObject, str):
     @staticmethod
-    def decode(objects: list, ns_info: dict) -> str:
+    def decode(objects, ns_info):
+        """
+        Args:
+            objects (list):
+            ns_info (dict):
+        Returns:
+            str:
+        """
         return NSString(ns_info['NS.string'])
 
 
 class NSUUID(NSBaseObject, uuid.UUID):
     @staticmethod
-    def encode(objects: list, value: uuid.UUID):
+    def encode(objects, value):
+        """
+        Args:
+            objects (list):
+            ns_info (uuid.UUID):
+        """
         ns_info = {
             "NS.uuidbytes": value.bytes,
         }
@@ -530,7 +607,14 @@ class NSUUID(NSBaseObject, uuid.UUID):
         })
 
     @staticmethod
-    def decode(objects: list, ns_info: dict) -> uuid.UUID:
+    def decode(objects, ns_info):
+        """
+        Args:
+            objects (list):
+            ns_info (dict):
+        Returns:
+            uuid.UUID
+        """
         return uuid.UUID(bytes=ns_info['NS.uuidbytes'])
 
 
@@ -539,7 +623,11 @@ class NSURL(NSBaseObject):
         self._base = base
         self._relative = relative
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other):
+        """
+        Returns:
+            bool:
+        """
         return self._base == other._base and self._relative == other._relative
 
     def __str__(self):
@@ -549,7 +637,12 @@ class NSURL(NSBaseObject):
         return self.__str__()
 
     @staticmethod
-    def encode(objects: list, value):
+    def encode(objects, value):
+        """
+        Args:
+            objects (list):
+            value:
+        """
         ns_info = {}
         objects.append(ns_info)
 
@@ -563,7 +656,12 @@ class NSURL(NSBaseObject):
         })
 
     @staticmethod
-    def decode(objects: list, ns_info: dict):
+    def decode(objects, ns_info):
+        """
+        Args:
+            objects (list):
+            ns_info (dict):
+        """
         base = _parse_object(objects, ns_info['NS.base'])
         relative = _parse_object(objects, ns_info['NS.relative'])
         return NSURL(base, relative)
@@ -594,7 +692,12 @@ class XCActivityRecord(NSBaseObject, dict):
         return 'XCActivityRecord({})'.format(', '.join(attrs))
 
     @staticmethod
-    def decode(objects: list, ns_info: dict):
+    def decode(objects, ns_info):
+        """
+        Args:
+            objects (list):
+            ns_info (dict):
+        """
         ret = XCActivityRecord()
         for key in XCActivityRecord._keys:
             ret[key] = _parse_object(objects, ns_info[key])
@@ -637,7 +740,12 @@ class NSException(NSBaseObject):
         return str(self)
 
     @staticmethod
-    def decode(objects: list, ns_info: dict):
+    def decode(objects, ns_info):
+        """
+        Args:
+            objects (list):
+            ns_info (dict):
+        """
         name = _parse_object(objects, ns_info['NS.name'])
         reason = _parse_object(objects, ns_info['NS.reason'])
         userinfo = _parse_object(objects, ns_info['NS.userinfo'])
@@ -726,7 +834,14 @@ _DECODE_MAP = {
 }
 
 
-def _encode_any(objects: list, value: Any) -> UID:
+def _encode_any(objects, value):
+    """
+    Args:
+        objects (list):
+        value (Any):
+    Returns:
+        UID
+    """
     _type = type(value)
     _class = _ENCODE_MAP.get(_type)
     if not _class:
@@ -739,7 +854,13 @@ def _encode_any(objects: list, value: Any) -> UID:
     return uid
 
 
-def objc_encode(value: Any) -> bytes:
+def objc_encode(value):
+    """
+    Args:
+        value (Any):
+    Returns:
+        bytes:
+    """
     objects = ['$null']
     _encode_any(objects, value)
     pdata = {
@@ -753,7 +874,14 @@ def objc_encode(value: Any) -> bytes:
     return dumps(pdata, fmt=FMT_BINARY)
 
 
-def _parse_object(objects: list, index: Union[int, UID]) -> Any:
+def _parse_object(objects, index):
+    """
+    Args:
+        objects (list):
+        index (Union[int, UID]):
+    Returns:
+        Any:
+    """
     if isinstance(index, UID):
         index = index.data
 
@@ -816,7 +944,13 @@ def _parse_object(objects: list, index: Union[int, UID]) -> Any:
         raise RuntimeError("decode not finished yet")
 
 
-def objc_decode(data: Union[bytes, dict]) -> Any:
+def objc_decode(data):
+    """
+    Args:
+        data (Union[bytes, dict]):
+    Returns:
+        Any:
+    """
     if isinstance(data, (bytes, bytearray)):
         data = loads(data)
     if not isinstance(data,

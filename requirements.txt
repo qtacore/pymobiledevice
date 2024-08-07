@@ -1,6 +1,10 @@
-M2Crypto==0.32.0 ; sys_platform == 'darwin'
+M2Crypto==0.32.0
 construct>=2.9.29
 pyasn1
 future
 six
 biplist
+attrs
+typing
+enum34
+packaging

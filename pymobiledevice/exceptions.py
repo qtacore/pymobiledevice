@@ -17,3 +17,7 @@ class MuxError(PyMobileDeviceException):
 
 class ServiceError(PyMobileDeviceException):
     pass
+
+
+class ConnectionError(PyMobileDeviceException):
+    pass

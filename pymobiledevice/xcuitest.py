@@ -1,13 +1,12 @@
 ## run xcuitest
 ## https://github.com/alibaba/taobao-iphone-device/blob/main/tidevice/_device.py#L921
+from __future__ import print_function
 import logging
 import threading
 import uuid
-import dataclasses
-from dataclasses import dataclass
 import typing
 import fnmatch
-from typing import Optional
+import attr
 
 from .util import bplist
 from .installation_proxy import installation_proxy as InstallationProxy
@@ -15,7 +14,7 @@ from .house_arrest import HouseArrestService
 from .lockdown import LockdownClient
 from .instruments import DTXService
 from .instruments import (
-    AUXMessageBuffer, DTXMessage,
+    AUXMessageBuffer,
     DTXPayload, DTXService,
     Event, ServiceInstruments)
 from .exceptions import MuxError
@@ -28,19 +27,35 @@ logger = logging.getLogger("pymobiledevice.xcuitest")
 logger.setLevel(level=logging.DEBUG)
 
 
-def alias_field(name: str) -> dataclasses.Field:
-    return dataclasses.field(metadata={"alias": name})
+def alias_field(name):
+    """
+    Args:
+        name (str): name
+    Returns:
+        attr.ib
+    """
+    return attr.ib(metadata={"alias": name})
 
 
-class _BaseInfo:
-    def _asdict(self) -> dict:
-        """ for simplejson """
-        return self.__dict__.copy()
+class _BaseInfo(object):
+    def _asdict(self):
+        """ for simplejson
+        Returns:
+            dict
+        """
+        return attr.asdict(self)
 
     @classmethod
-    def from_json(cls: _T, data: dict) -> _T:
+    def from_json(cls, data):
+        """
+        Args:
+            cls (_T):
+            data (dict):
+        Returns:
+            _T
+        """
         kwargs = {}
-        for field in dataclasses.fields(cls):
+        for field in attr.fields(cls):
             possible_names = [field.name]
             if "alias" in field.metadata:
                 possible_names.append(field.metadata["alias"])
@@ -53,14 +68,18 @@ class _BaseInfo:
                     break
         return cls(**kwargs)
 
-    def __repr__(self) -> str:
+    def __repr__(self):
+        """
+        Returns:
+            str
+        """
         attrs = []
         for k, v in self.__dict__.items():
-            attrs.append(f"{k}={v!r}")
-        return f"<{self.__class__.__name__} " + ", ".join(attrs) + ">"
+            attrs.append("{}={!r}".format(k, v))
+        return "<{} ".format(self.__class__.__name__) + ", ".join(attrs) + ">"
 
 
-@dataclass(frozen=True)
+@attr.s(frozen=True)
 class XCTestResult(_BaseInfo):
     """Representing the XCTest result printed at the end of test.
 
@@ -79,15 +98,19 @@ class XCTestResult(_BaseInfo):
         "\t Executed {run_count} test, with {failure_count} failures ({unexpected_count} unexpected) in {test_duration:.3f} ({total_duration:.3f}) seconds"
     )
 
-    test_suite_name: str = alias_field('TestSuiteName')
-    end_time: str = alias_field('EndTime')
-    run_count: int = alias_field('RunCount')
-    failure_count: int = alias_field('FailureCount')
-    unexpected_count: int = alias_field('UnexpectedCount')
-    test_duration: float = alias_field('TestDuration')
-    total_duration: float = alias_field('TotalDuration')
+    test_suite_name = alias_field('TestSuiteName')
+    end_time = alias_field('EndTime')
+    run_count = alias_field('RunCount')
+    failure_count = alias_field('FailureCount')
+    unexpected_count = alias_field('UnexpectedCount')
+    test_duration = alias_field('TestDuration')
+    total_duration = alias_field('TotalDuration')
 
-    def __repr__(self) -> str:
+    def __repr__(self):
+        """
+        Returns:
+            str
+        """
         return self.MESSAGE.format(
             test_suite_name=self.test_suite_name, end_time=self.end_time,
             run_count=self.run_count, failure_count=self.failure_count,
@@ -102,22 +125,33 @@ class XCUITestRunner(object):
         self._lockdown = lockdown if lockdown else LockdownClient()
         self._installation = InstallationProxy(self._lockdown)
 
-    def get_value(self, key: str = '', domain: str = "", no_session: bool = False):
+    def get_value(self, key = '', domain = "", no_session = False):
         """ key can be: ProductVersion
         Args:
+            key (str):
             domain (str): com.apple.disk_usage
             no_session: set to True when not paired
         """
         return self._lockdown.getValue(domain, key)
 
-    def _connect_testmanagerd_lockdown(self) -> DTXService:
+    def _connect_testmanagerd_lockdown(self):
+        """ connect to testmanagerd lockdown service
+        Returns:
+            DTXService: connected service
+        """
         if self.major_version() >= 14:
             conn = self._lockdown.startService("com.apple.testmanagerd.lockdown.secure")
         else:
             conn = self._lockdown.startService("com.apple.testmanagerd.lockdown")
         return DTXService(conn)
 
-    def _fnmatch_find_bundle_id(self, bundle_id: str) -> str:
+    def _fnmatch_find_bundle_id(self, bundle_id):
+        """
+        Args:
+            bundle_id (str): application bundle id
+        Returns:
+            str: found bundle id
+        """
         bundle_ids = []
         for binfo in self._installation.iter_installed(attrs=['CFBundleIdentifier']):
             if fnmatch.fnmatch(binfo['CFBundleIdentifier'], bundle_id):
@@ -131,13 +165,25 @@ class XCUITestRunner(object):
         return bundle_ids[0]
 
     def _launch_wda_app(self,
-            bundle_id: str,
-            session_identifier: uuid.UUID,
-            xctest_configuration: bplist.XCTestConfiguration,
-            quit_event: threading.Event = None,
-            test_runner_env: Optional[dict] = None,
-            test_runner_args: Optional[list] = None
-        ) -> typing.Tuple[ServiceInstruments, int]:  # pid
+            bundle_id,
+            session_identifier,
+            xctest_configuration,
+            quit_event = None,
+            test_runner_env = None,
+            test_runner_args = None
+        ):  # pid
+        """
+        Args:
+            bundle_id (str): application bundle id
+            session_identifier (uuid.UUID): session idendifier
+            xctest_configuration (bplist.XCTestConfiguration): configuration
+            quit_event (threading.Event): app quit event
+            test_runner_env (Optional[dict]): test runner for env
+            test_runner_args (Optional[list]): test runner args
+        Returns:
+            ServiceInstruments: connected service
+            int: pid
+        """
         app_info = self._installation.find_bundle_id(bundle_id)
         sign_identity = app_info.get("SignerIdentity", "")
         logger.info("SignIdentity: %r", sign_identity)
@@ -150,7 +196,8 @@ class XCUITestRunner(object):
         assert exec_name.endswith("-Runner"), "Invalid CFBundleExecutable: %s" % exec_name
         target_name = exec_name[:-len("-Runner")]
 
-        xctest_path = f"/tmp/{target_name}-{str(session_identifier).upper()}.xctestconfiguration"  # yapf: disable
+        xctest_path = "/tmp/{}-{}.xctestconfiguration".format(
+            target_name, str(session_identifier).upper())  # yapf: disable
         xctest_content = bplist.objc_encode(xctest_configuration)
 
         # fsync = self.app_sync(bundle_id, command="VendContainer")
@@ -189,7 +236,7 @@ class XCUITestRunner(object):
             'NSUnbufferedIO': 'YES',
             'SQLITE_ENABLE_THREAD_ASSERTIONS': '1',
             'WDA_PRODUCT_BUNDLE_IDENTIFIER': '',
-            'XCTestBundlePath': f"{app_info['Path']}/PlugIns/{target_name}.xctest",
+            'XCTestBundlePath': "{}/PlugIns/{}.xctest".format(app_info['Path'], target_name),
             'XCTestConfigurationFilePath': xctestconfiguration_path,
             'XCODE_DBG_XPC_EXCLUSIONS': 'com.apple.dt.xctestSymbolicator',
             'MJPEG_SERVER_PORT': '',
@@ -225,7 +272,11 @@ class XCUITestRunner(object):
         aux.append_obj(pid)
         conn.call_message(channel, "startObservingPid:", aux)
 
-        def _callback(m: DTXMessage):
+        def _callback(m):
+            """
+            Args:
+                m (DTXMessage): callback message
+            """
             # logger.info("output: %s", m.result)
             if m is None:
                 logger.warning("WebDriverAgentRunner quitted")
@@ -244,7 +295,11 @@ class XCUITestRunner(object):
                         logger.info("%s", args[0].rstrip())
                         logger.info("WebDriverAgent start successfully")
 
-        def _log_message_callback(m: DTXMessage):
+        def _log_message_callback(m):
+            """
+            Args:
+                m (DTXMessage): callback message
+            """
             identifier, args = m.result
             logger.debug("logConsole: %s", args)
             if isinstance(args, (tuple, list)):
@@ -260,25 +315,45 @@ class XCUITestRunner(object):
             conn.register_callback(Event.FINISHED, lambda _: quit_event.set())
         return conn, pid
 
-    def major_version(self) -> int:
+    def major_version(self):
+        """
+        Returns:
+            int: major version
+        """
         version = self.get_value("ProductVersion")
         return int(version.split(".")[0])
 
-    def _gen_xctest_configuration(self,
-                                        app_info: dict,
-                                        session_identifier: uuid.UUID,
-                                        target_app_bundle_id: str = None,
-                                        target_app_env: Optional[dict] = None,
-                                        target_app_args: Optional[list] = None,
-                                        tests_to_run: Optional[set] = None) -> bplist.XCTestConfiguration:
+    def _gen_xctest_configuration(
+        self,
+        app_info,
+        session_identifier,
+        target_app_bundle_id,
+        target_app_env,
+        target_app_args,
+        tests_to_run = None
+    ):
+        """
+        generate xctest configuration
+
+        Args:
+            app_info (dict): application information
+            session_identifier (uuid.UUID): session identifier
+            target_app_bundle_id (str): application bundle id
+            target_app_env (Optional[dict]): app environment
+            target_app_args (Optional[list]): app arguments
+            tests_to_run (Optional[set]): tests to run
+
+        Returns:
+            bplist.XCTestConfiguration: xctest configuration
+        """
         # CFBundleName always endswith -Runner
-        exec_name: str = app_info['CFBundleExecutable']
+        exec_name = app_info['CFBundleExecutable']
         assert exec_name.endswith("-Runner"), "Invalid CFBundleExecutable: %s" % exec_name
         target_name = exec_name[:-len("-Runner")]
 
         # xctest_path = f"/tmp/{target_name}-{str(session_identifier).upper()}.xctestconfiguration"  # yapf: disable
         return bplist.XCTestConfiguration({
-            "testBundleURL": bplist.NSURL(None, f"file://{app_info['Path']}/PlugIns/{target_name}.xctest"),
+            "testBundleURL": bplist.NSURL(None, "file://{}/PlugIns/{}.xctest".format(app_info['Path'], target_name)),
             "sessionIdentifier": session_identifier,
             "targetApplicationBundleID": target_app_bundle_id,
             "targetApplicationArguments": target_app_args or [],
@@ -291,11 +366,11 @@ class XCUITestRunner(object):
         })  # yapf: disable
 
     def xcuitest(self, bundle_id, target_bundle_id=None,
-                    test_runner_env: dict={},
-                    test_runner_args: Optional[list]=None,
-                    target_app_env: Optional[dict]=None,
-                    target_app_args: Optional[list]=None,
-                    tests_to_run: Optional[set]=None):
+                    test_runner_env={},
+                    test_runner_args=None,
+                    target_app_env=None,
+                    target_app_args=None,
+                    tests_to_run=None):
         """
         Launch xctrunner and wait until quit
 
@@ -345,16 +420,25 @@ class XCUITestRunner(object):
 
         _start_flag = threading.Event()
 
-        def _start_executing(m: Optional[DTXMessage] = None):
+        def _start_executing(m=None):
+            """
+            start executing tests
+
+            Args:
+                m (Optional[DTXMessage]): message
+            """
             if _start_flag.is_set():
                 return
             _start_flag.set()
 
-            logger.info("Start execute test plan with IDE version: %d",
-                        XCODE_VERSION)
+            logger.info("Start execute test plan with IDE version: %d", XCODE_VERSION)
             x2.call_message(0xFFFFFFFF, '_IDE_startExecutingTestPlanWithProtocolVersion:', [XCODE_VERSION], expects_reply=False)
 
-        def _show_log_message(m: DTXMessage):
+        def _show_log_message(m):
+            """
+            Args:
+                m (DTXMessage): message
+            """
             logger.debug("logMessage: %s", m.result[1])
             if 'Received test runner ready reply' in ''.join(
                     m.result[1]):
@@ -371,7 +455,11 @@ class XCUITestRunner(object):
         test_results = []
         test_results_lock = threading.Lock()
 
-        def _record_test_result_callback(m: DTXMessage):
+        def _record_test_result_callback(m):
+            """
+            Args:
+                m (DTXMessage): message
+            """
             result = None
             if isinstance(m.result, (tuple, list)) and len(m.result) >= 1:
                 if isinstance(m.result[1], (tuple, list)):
@@ -396,7 +484,11 @@ class XCUITestRunner(object):
         app_info = self._installation.find_bundle_id(bundle_id)
         xctest_configuration = self._gen_xctest_configuration(app_info, session_identifier, target_bundle_id, target_app_env, target_app_args, tests_to_run)
 
-        def _ready_with_caps_callback(m: DTXMessage):
+        def _ready_with_caps_callback(m):
+            """
+            Args:
+                m (DTXMessage): message
+            """
             x2.send_dtx_message(m.channel_id,
                                 payload=DTXPayload.build_other(0x03, xctest_configuration),
                                 message_id=m.message_id)
@@ -473,18 +565,26 @@ class XCUITestRunner(object):
         if any(result.failure_count > 0 for result in test_results):
                 raise RuntimeError(
                     "Xcode test failed on device with test results:\n"
-                    f"{test_result_str}"
+                    "{}".format(test_result_str)
                 )
 
         logger.info("xctrunner quited with result:\n%s", test_result_str)
 
     def runwda(self, fuzzy_bundle_id="com.*.xctrunner", target_bundle_id=None,
-               test_runner_env: Optional[dict]=None,
-               test_runner_args: Optional[list]=None,
-               target_app_env: Optional[dict]=None,
-               target_app_args: Optional[list]=None,
-               tests_to_run: Optional[set]=None):
-        """ Alias of xcuitest """
+               test_runner_env=None,
+               test_runner_args=None,
+               target_app_env=None,
+               target_app_args=None,
+               tests_to_run=None):
+        """ Alias of xcuitest
+        Args:
+            target_bundle_id (str): optional, launch WDA-UITests will not need it
+            test_runner_env (dict[str, str]): optional, the environment variables to be passed to the test runner
+            test_runner_args (list[str]): optional, the command line arguments to be passed to the test runner
+            target_app_env (dict[str, str]): optional, the environmen variables to be passed to the target app
+            target_app_args (list[str]): optional, the command line arguments to be passed to the target app
+            tests_to_run (set[str]): optional, the specific test classes or test methods to run
+        """
         bundle_id = self._fnmatch_find_bundle_id(fuzzy_bundle_id)
         logger.info("BundleID: %s", bundle_id)
         return self.xcuitest(bundle_id, target_bundle_id=target_bundle_id,

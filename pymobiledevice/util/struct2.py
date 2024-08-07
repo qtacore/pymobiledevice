@@ -44,7 +44,11 @@ class Byte(Field):
     def __init__(self, name, default=None, format=None):
         super().__init__(name, default, format="s")
 
-    def __item__(self, n: int):
+    def __item__(self, n):
+        """
+        Args:
+            n (int):
+        """
         self._format = str(n)+"s"
         return self
 
@@ -56,7 +60,13 @@ U64 = UInt64 = partial(Field, format="Q")
 
 
 class Struct(object):
-    def __init__(self, typename: str, *fields, byteorder="<"):
+    def __init__(self, typename, *fields, **kwargs):
+        """
+        Args:
+            typename (str):
+        """
+        byteorder = kwargs.pop('byteorder', '<')
+
         self._fields = [self._convert_field(f) for f in fields]
         self._typename = typename
         self._fmt = byteorder + ''.join([f.format for f in self._fields])
@@ -77,14 +87,26 @@ class Struct(object):
         else:
             raise ValueError("Unknown type:", fvalue)
 
-    def parse_stream(self, reader: typing.BinaryIO):
+    def parse_stream(self, reader):
+        """
+        Args:
+            reader (typing.BinaryIO):
+        """
         return self.parse(reader.read(self.size))
 
-    def parse(self, buffer: bytes):
+    def parse(self, buffer):
+        """
+        Args:
+            buffer (bytes):
+        """
         values = struct.unpack(self._fmt, buffer)
         return namedtuple(self._typename, self._field_names)(*values)
 
-    def build(self, *args, **kwargs) -> bytearray:
+    def build(self, *args, **kwargs):
+        """
+        Returns:
+            bytearray:
+        """
         if args:
             assert len(args) == 1
             assert isinstance(args[0], dict)

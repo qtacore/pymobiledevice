@@ -20,11 +20,9 @@ import queue
 import re
 import struct
 import threading
-import typing
 import weakref
 from packaging.version import Version
 from collections import defaultdict, namedtuple
-from typing import Any, Iterator, List, Optional, Tuple, Union
 
 from ctypes import Structure,c_byte,c_uint16,c_uint32
 from socket import inet_ntoa,htons,inet_ntop,AF_INET6
@@ -33,6 +31,7 @@ from .util import bplist
 from .util import struct2 as ct
 from .exceptions import MuxError, ServiceError
 from .lockdown import LockdownClient
+from .exceptions import ConnectionError
 
 logger = logging.getLogger("pymmobiledevice.xcuitest")
 
@@ -68,7 +67,7 @@ class SockAddr4(Structure):
         ]
 
     def __str__(self):
-        return f"{inet_ntoa(self.addr)}:{htons(self.port)}"
+        return "{}:{}".format(inet_ntoa(self.addr), htons(self.port))
 
 class SockAddr6(Structure):
     _fields_ = [
@@ -80,12 +79,17 @@ class SockAddr6(Structure):
         ('scopeid', c_uint32)
     ]
     def __str__(self):
-        return f"[{inet_ntop(AF_INET6, self.addr)}]:{htons(self.port)}"
+        return "[{}]:{}".format(inet_ntop(AF_INET6, self.addr), htons(self.port))
 
 class DTXPayload:
     @staticmethod
-    def parse(payload: Union[bytes, bytearray]) -> typing.Tuple[int, Any]:
-        """ returns (flags, result) """
+    def parse(payload):
+        """ returns (flags, result)
+        Args:
+            payload (Union[bytes, bytearray]):
+        Returns:
+            typing.Tuple[int, Any]:
+        """
         h = DTXPayloadHeader.parse(payload[:0x10])
 
         flags = h.flags
@@ -128,14 +132,18 @@ class DTXPayload:
             # raise MuxError("Unknown flags", flags)
 
     @staticmethod
-    def build(identifier: str, args: Union[list, "AUXMessageBuffer"] = []) -> bytes:
+    def build(identifier, args=[]):
         """ 最常用的一种调用方法 flags: 0x02
         Args:
-            identifier: usally function name
+            identifier (str): usally function name
+            args (Union[list, "AUXMessageBuffer"]):
+        Returns:
+            bytes:
 
         For example:
             build("setConfig:", [{"bm": 0}])
         """
+
         sel_data = bplist.objc_encode(identifier)
         if isinstance(args, AUXMessageBuffer):
             aux_data = args.get_bytes()
@@ -146,7 +154,6 @@ class DTXPayload:
             for arg in args:
                 aux.append_obj(arg)
             aux_data = aux.get_bytes()
-
         pheader = DTXPayloadHeader.build({
             "flags": 0x02, #, | (0x1000 if expects_reply else 0),
             "aux_length": len(aux_data),
@@ -154,12 +161,15 @@ class DTXPayload:
         }) # yapf: disable
         return pheader + aux_data + sel_data
 
-    def build_empty() -> bytes:
-        """ flags: 0x00 """
+    def build_empty():
+        """ flags: 0x00
+        Returns:
+            bytes:
+        """
         return b'\00' * 16
 
     @staticmethod
-    def build_other(flags, body: Any = None) -> bytes:
+    def build_other(flags, body=None):
         """
         payload = header(flags+length) + body
         Args:
@@ -200,15 +210,29 @@ class Event(str, enum.Enum):
 
 
 class BinReader(io.BytesIO):
-    def read_u32(self) -> int:
+    def read_u32(self):
+        """
+        Returns:
+            int:
+        """
         (val, ) = struct.unpack("I", self.read(4))
         return val
 
-    def read_u64(self) -> int:
+    def read_u64(self):
+        """
+        Returns:
+            int:
+        """
         (val, ) = struct.unpack("Q", self.read(8))
         return val
 
-    def read_exactly(self, n: int) -> bytes:
+    def read_exactly(self, n):
+        """
+        Args:
+            n (int):
+        Returns:
+            bytes:
+        """
         data = self.read(n)
         if len(data) != n:
             raise MuxError("read expect length: 0x%X, got: 0x%x" %
@@ -217,11 +241,13 @@ class BinReader(io.BytesIO):
 
 
 # class AUXMessage
-def unpack_aux_message(data: bytes) -> list:
+def unpack_aux_message(data):
     """ Parse aux message array
+    Args:
+        data (bytes):
 
     Returns:
-        list of data
+        list: list of data
     """
     if len(data) < 16:
         raise MuxError("aux data is too small to unpack")
@@ -257,26 +283,40 @@ class AUXMessageBuffer(object):
     def __init__(self):
         self._buf = bytearray()
 
-    def _extend(self, b: bytes):
+    def _extend(self, b):
+        """
+        Args:
+            b (bytes):
+        """
         self._buf.extend(b)
 
-    def get_bytes(self) -> bytearray:
+    def get_bytes(self):
         """
         the final serialized array must start with a magic qword,
         followed by the total length of the array data as a qword,
         followed by the array data itself.
+
+        Returns:
+            bytearray:
         """
         out = bytearray()
         out.extend(struct.pack("QQ", 0x01F0, len(self._buf)))
         out.extend(self._buf)
         return out
 
-    def append_u32(self, n: int):
+    def append_u32(self, n):
+        """
+        Args:
+            n (int):
+        """
         self._extend(struct.pack("III", 10, 3, n))
 
-    def append_u64(self, n: int):
+    def append_u64(self, n):
         """
         0000: 10 00 00 00 04 00 00 00 xx xx xx xx
+
+        Args:
+            n (int):
         """
         self._extend(struct.pack("IIQ", 10, 4, n))
 
@@ -303,6 +343,9 @@ class DTXService:
         self._conn = conn
         self.prepare()
 
+    def __del__(self):
+        self._stop_event.set()
+
     def prepare(self):
         self._last_message_id = 0
         self._last_channel_id = 0
@@ -322,19 +365,33 @@ class DTXService:
         self.send_dtx_message(channel=0, payload=payload)
         self._dtx_message_pool = {}
         self._drain_background()  # 开启接收线程
-        weakref.finalize(self, self._stop_event.set)
+        # weakref.finalize(self, self._stop_event.set) # 为了兼容python2，放到__del__中执行
 
-    def _next_message_id(self) -> int:
+    def _next_message_id(self):
+        """
+        Returns:
+            int: next message id
+        """
         self._last_message_id += 1
         return self._last_message_id
 
-    def _next_channel_id(self) -> int:
+    def _next_channel_id(self):
+        """
+        Returns:
+            int: next channel id
+        """
         self._last_channel_id += 1
         return self._last_channel_id
 
-    def make_channel(self, identifier: str) -> int:
+    def make_channel(self, identifier):
         """
         returns channel id
+
+        Args:
+            identifier (str): channel identifier
+
+        Returns:
+            int: channel id
         """
         if hasattr(identifier, "value"): # enum.Enum type
             identifier = identifier.value
@@ -353,7 +410,7 @@ class DTXService:
         self._channels[identifier] = channel_id
         return channel_id
 
-    def iter_message(self, identifier: Union[str, Event]) -> Iterator[DTXMessage]:
+    def iter_message(self, identifier):
         """
         Subscribe dtx message
 
@@ -361,29 +418,44 @@ class DTXService:
             for m in self.iter_message(Event.NOTIFICATION):
                 if m.channel_id = 0xFFFFFFFF:
                     print(m.result)
+
+        Args:
+            identifier (Union[str, Event]):
+        Returns:
+            Iterator[DTXMessage]
         """
         q = queue.Queue()
         self.register_callback(identifier, lambda m: q.put(m))
         for m in iter(q.get, None):
             yield m
 
-    def register_callback(self, identifier, func: typing.Callable):
+    def register_callback(self, identifier, func):
         """ call function when server called
 
         Args:
-            func(data: DTXMessage)
+            func (data: DTXMessage)
         """
         self._handlers[identifier] = func
 
     def call_message(
         self,
-        channel: Union[int, str],
-        identifier: str,
-        aux: Union[AUXMessageBuffer, list] = [],
-        expects_reply: bool = True
-    ) -> Union[None, tuple, Any]:
+        channel,
+        identifier,
+        aux=[],
+        expects_reply=True
+    ):
         """ send message and wait for reply
-        Returns could be None, tuple or single value"""
+        Returns could be None, tuple or single value
+
+        Args:
+            channel (Union[int, str]):
+            identifier (str):
+            aux (Union[AUXMessageBuffer, list]):
+            expects_reply (bool)
+
+        Returns:
+            Union[None, tuple, Any]:
+        """
         if isinstance(channel, str):
             channel = self.make_channel(channel)
         payload = DTXPayload.build(identifier, aux)
@@ -393,18 +465,26 @@ class DTXService:
         if expects_reply:
             return self.wait_reply(_id).result
 
-    def send_dtx_message(self,
-                         channel: int,
-                         payload: Union[bytes, bytearray],
-                         expects_reply: bool = False,
-                         message_id: Optional[int] = None) -> int:
+    def send_dtx_message(
+        self,
+        channel,
+        payload,
+        expects_reply=False,
+        message_id=None,
+    ):
         """
         when identifier is None, args will be ignored
         when message_id is set, conversation_index will set to 1,
             which means this message is a reply
 
+        Args:
+            channel (int):
+            payload (Union[bytes, bytearray]):
+            expects_reply (bool):
+            message_id (Optional[int]):
+
         Returns:
-            message_id
+            int: message_id
         """
         # if self.psock.closed:
         #     raise ServiceError("SocketConnectionInvalid")
@@ -429,13 +509,13 @@ class DTXService:
         self._conn.send(data)
         return _message_id
 
-    def recv_part_dtx_message(self) -> typing.Optional[int]:
+    def recv_part_dtx_message(self):
         """
         DTXMessage contains one or more fragmenets
         This fragments may received in different orders
 
         Returns:
-            None or message_id
+            typing.Optional[int]: None or message_id
         """
         data = self._conn.recv_exact(0x20)
         h = DTXMessageHeader.parse(data)
@@ -462,7 +542,7 @@ class DTXService:
         else:
             return None
 
-    def recv_dtx_message(self) -> Tuple[Any, bytearray]:
+    def recv_dtx_message(self):
         """
         前32个字节(两行) 为DTXMessage的头部 (包含了消息的类型和请求的channel)
         后面是携带的payload
@@ -474,6 +554,7 @@ class DTXService:
             MuxError
 
         Returns:
+            Tuple[Any, bytearray]:
             retobj  contains the return value for the method invoked by send_message()
             aux     usually empty, except in specific situations (see _notifyOfPublishedCapabilities)
 
@@ -550,23 +631,35 @@ class DTXService:
             assert mheader.expects_reply in [0, 1]
             return (mheader, payload)
 
-    def _call_handlers(self, event_name: Event, data: Any = None) -> bool:
+    def _call_handlers(self, event_name, data=None):
         """
+        Args:
+           event_name (Event):
+           data (Any):
         Returns:
-            return handle func return
+            bool: return handle func return
         """
         func = self._handlers.get(event_name)
         if func:
             return func(data)
 
-    def _reply_null(self, m: DTXMessage):
-        """ null reply means message received """
+    def _reply_null(self, m):
+        """ null reply means message received
+        Args:
+            m (DTXMessage): message
+        """
         self.send_dtx_message(m.channel_id,
                               payload=DTXPayload.build_empty(),
                               message_id=m.message_id)
         return True
 
-    def _handle_dtx_message(self, m: DTXMessage) -> bool:
+    def _handle_dtx_message(self, m):
+        """
+        Args:
+            m (DTXMessage): message
+        Returns:
+            bool:
+        """
         assert m.header.expects_reply == 1
 
         if m.channel_id == 0xFFFFFFFF and m.flags == 0x05:
@@ -587,8 +680,15 @@ class DTXService:
         if self._call_handlers(Event.OTHER, m):
             return True
 
-    def wait_reply(self, message_id: int, timeout=30.0) -> DTXMessage:
+    def wait_reply(self, message_id, timeout=30.0):
         """
+        Args:
+            message_id (int): message id
+            timeout (float):
+
+        Returns:
+            DTXMessage:
+
         Raises:
             ConnectionError, ServiceError
 
@@ -603,7 +703,9 @@ class DTXService:
             raise ServiceError("wait reply timeout")
 
     def _drain_background(self):
-        threading.Thread(name="DTXMessage", target=self._drain, daemon=True).start()
+        t = threading.Thread(name="DTXMessage", target=self._drain)
+        t.setDaemon(True)
+        t.start()
 
     def _drain(self):
         try:
@@ -693,20 +795,17 @@ class ServiceInstruments(DTXService):
                 cli.sock._sslobj = None
         super().__init__(cli)
 
-    def app_launch(self,
-                   bundle_id: str,
-                   app_env: typing.Dict[str, str] = {},
-                   args: typing.List[str] = []) -> int:
+    def app_launch(self, bundle_id, app_env={}, args=[]):
         """
         Launch an app with bundle id
 
         Args:
-            bundle_id: bundle id of the app
-            app_env: environment variables
-            args: arguments
+            bundle_id (str): bundle id of the app
+            app_env (typing.Dict[str, str]): environment variables
+            args (typing.List[str]): arguments
 
         Returns:
-            pid of the app
+            int: pid of the app
 
         Raises:
             ServiceError
@@ -730,15 +829,22 @@ class ServiceInstruments(DTXService):
             raise ServiceError("app launch failed", error_message)
         return pid
 
-    def app_kill(self, pid: int):
+    def app_kill(self, pid):
+        """
+        Args:
+            pid (int):
+        """
         channel = self.make_channel(self._SERVICE_PROCESS_CONTROL)
         if channel < 1:
             raise MuxError("make Channel error")
 
         self.call_message(channel, "killPid:", [pid], expects_reply=False)
 
-    def app_running_processes(self) -> typing.List[dict]:
+    def app_running_processes(self):
         """
+        Returns:
+            typing.List[dict]:
+
         Returns array of dict:
             {'isApplication': False,
             'name': 'timed',
@@ -755,13 +861,13 @@ class ServiceInstruments(DTXService):
         retobj = self.call_message(identifier, "runningProcesses")
         return retobj
 
-    def app_process_list(self, app_infos: List[dict]) -> Iterator[dict]:
+    def app_process_list(self, app_infos):
         """
         Args:
-            app_infos: value from self.instrumentation.app_list()
+            app_infos (List[dict]): value from self.instrumentation.app_list()
 
         Returns:
-            yield of
+            Iterator[dict]: yield of
             {
                 'isApplication': True,
                 'name': 'timed',
@@ -772,7 +878,12 @@ class ServiceInstruments(DTXService):
                 'display_name': "xxxxx",
             }
         """
-        def exefile2appinfo(exe_abspath: str, app_infos: List[dict]):
+        def exefile2appinfo(exe_abspath, app_infos):
+            """
+            Args:
+                exe_abspath (str): executable file absolute path
+                app_infos (List[dict]): application information
+            """
             for info in app_infos:
                 # info may not contain key "Path"
                 # https://github.com/alibaba/taobao-iphone-device/issues/61
@@ -811,7 +922,7 @@ class ServiceInstruments(DTXService):
             [{}, ""])
         return ret
 
-    def system_info(self) -> dict:
+    def system_info(self):
         """
         Returns:
             {'_deviceDescription': 'Build Version 17E262, iPhone ID '
@@ -827,8 +938,10 @@ class ServiceInstruments(DTXService):
         code = self.make_channel(identifier)
         return self.call_message(code, "systemInformation")
 
-    def iter_opengl_data(self) -> Iterator[dict]:
+    def iter_opengl_data(self):
         """
+        Returns:
+            Iterator[dict]:
         Yield data
         {'CommandBufferRenderCount': 0,
         'CoreAnimationFramesPerSecond': 0,
@@ -881,8 +994,10 @@ class ServiceInstruments(DTXService):
         channel = self.make_channel("com.apple.instruments.server.services.graphics.opengl")
         return self.call_message(channel,"stopSampling")
 
-    def iter_application_notification(self) -> Iterator[dict]:
+    def iter_application_notification(self):
         """ 监听应用通知
+        Retunrs:
+            Iterator[dict]:
         Iterator data
             ('applicationStateNotification:',
                 [{'appName': 'com.tencent.xin.WeChatNotificationServiceExtension',
@@ -912,9 +1027,12 @@ class ServiceInstruments(DTXService):
         except GeneratorExit:
             self.close()
 
-    def iter_cpu_memory(self) -> Iterator[dict]:
+    def iter_cpu_memory(self):
         """
         Close connection after iterator stop
+
+        Returns:
+            Iterator[dict]:
 
         Iterator content eg:
             [{'CPUCount': 2,
@@ -997,17 +1115,29 @@ class ServiceInstruments(DTXService):
         channel_id = self.make_channel("com.apple.instruments.server.services.sysmontap")
         return self.call_message(channel_id,"stop")
 
-    def start_energy_sampling(self, pid: int):
+    def start_energy_sampling(self, pid):
+        """
+        Args:
+            pid (int):
+        """
         ch_network = 'com.apple.xcode.debug-gauge-data-providers.Energy'
         return self.call_message(ch_network, 'startSamplingForPIDs:', [{pid}])
 
-    def stop_energy_sampling(self, pid: int):
+    def stop_energy_sampling(self, pid):
+        """
+        Args:
+            pid (int):
+        """
         ch_network = 'com.apple.instruments.server.services.networking'
         return self.call_message(ch_network, 'stopSamplingForPIDs:', [{pid}])
 
-    def get_process_energy_stats(self, pid: int) -> Optional[dict]:
+    def get_process_energy_stats(self, pid):
         """
-        Returns dict:
+        Args:
+            pid (int):
+
+        Returns:
+            dict:
             example:
             {
                 "energy.overhead": -10,
@@ -1035,20 +1165,34 @@ class ServiceInstruments(DTXService):
         ret = self.call_message(ch_network, 'sampleAttributes:forPIDs:', args)
         return ret.get(pid)
 
-    def start_network_sampling(self, pid: int):
+    def start_network_sampling(self, pid):
+        """
+        Args:
+            pid (int):
+        """
         ch_network = 'com.apple.xcode.debug-gauge-data-providers.NetworkStatistics'
         return self.call_message(ch_network, 'startSamplingForPIDs:', [{pid}])
 
-    def stop_network_sampling(self, pid: int):
+    def stop_network_sampling(self, pid):
+        """
+        Args:
+            pid (int):
+        """
         ch_network = 'com.apple.xcode.debug-gauge-data-providers.NetworkStatistics'
         return self.call_message(ch_network, 'stopSamplingForPIDs:', [{pid}])
 
     def stop_network_iter(self):
         return self.call_message('com.apple.instruments.server.services.networking', 'stopMonitoring:')
 
-    def get_process_network_stats(self, pid: int) -> Optional[dict]:
+    def get_process_network_stats(self, pid):
         """
         经测试数据始终不是很准，用safari测试，每次刷新图片的时候，rx.bytes总是不动
+
+        Args:
+            pid (int):
+
+        Returns:
+            Optional[dict]
         """
         ch_network = 'com.apple.xcode.debug-gauge-data-providers.NetworkStatistics'
         args = [{
@@ -1069,9 +1213,12 @@ class ServiceInstruments(DTXService):
         ret = self.call_message(ch_network, 'sampleAttributes:forPIDs:', args)
         return ret.get(pid)
 
-    def iter_network(self) -> Iterator[dict]:
+    def iter_network(self):
         """
         system network
+
+        Returns:
+             Iterator[dict]:
 
         yield of {
             "rx.bytes": ..,
@@ -1125,19 +1272,34 @@ class ServiceInstruments(DTXService):
                 msg_type[_type]: dict(zip(headers[_type], values))
             }
 
-    def is_running_pid(self, pid: int) -> bool:
+    def is_running_pid(self, pid):
+        """
+        Args:
+            pid (int):
+        Returns:
+            bool:
+        """
         aux = AUXMessageBuffer()
         aux.append_obj(pid)
         return self.call_message(self._SERVICE_DEVICEINFO, 'isRunningPid:', aux)
 
-    def execname_for_pid(self, pid: int) -> str:
+    def execname_for_pid(self, pid):
+        """
+        Args:
+            pid (int):
+        Returns:
+            str:
+        """
         aux = AUXMessageBuffer()
         aux.append_obj(pid)
         return self.call_message(self._SERVICE_DEVICEINFO, 'execnameForPid:', aux)
 
-    def hardware_information(self) -> dict:
+    def hardware_information(self):
         """
-        Return example:
+        Returns:
+            dict:
+
+        example:
         {'numberOfPhysicalCpus': 2,
         'hwCPUsubtype': 1,
         'numberOfCpus': 2,
@@ -1147,8 +1309,11 @@ class ServiceInstruments(DTXService):
         """
         return self.call_message(self._SERVICE_DEVICEINFO, 'hardwareInformation')
 
-    def network_information(self) -> dict:
+    def network_information(self):
         """
+        Returns:
+            dict:
+
         Return example:
         {'en0': 'Wi-Fi',
         'pdp_ip3': 'Cellular (pdp_ip3)',
