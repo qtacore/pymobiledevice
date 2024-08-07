@@ -29,7 +29,7 @@ from typing import Any, Iterator, List, Optional, Tuple, Union
 from ctypes import Structure,c_byte,c_uint16,c_uint32
 from socket import inet_ntoa,htons,inet_ntop,AF_INET6
 
-from . import bplist
+from .util import bplist
 from .util import struct2 as ct
 from .exceptions import MuxError, ServiceError
 from .lockdown import LockdownClient

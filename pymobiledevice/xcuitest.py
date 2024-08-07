@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import typing
 from typing import Optional
 
-from . import bplist
+from .util import bplist
 from .installation_proxy import installation_proxy as InstallationProxy
 from .house_arrest import HouseArrestService
 from .lockdown import LockdownClient
