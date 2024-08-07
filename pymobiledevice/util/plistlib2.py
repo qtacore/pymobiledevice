@@ -58,12 +58,13 @@ try:
     import enum
 except ImportError:
     import enum34 as enum
-from six import BytesIO
+from six import BytesIO, PY2
 import itertools
 import os
 import re
 import struct
 import six
+import string
 from warnings import warn
 from xml.parsers.expat import ParserCreate
 
@@ -556,6 +557,22 @@ _BINARY_FORMAT = {1: 'B', 2: 'H', 4: 'L', 8: 'Q'}
 
 _undefined = object()
 
+def is_printable(s):
+    return all(c in string.printable for c in s)
+
+def bytes_to_int(b, byteorder='big', signed=False):
+    if six.PY2:
+        if byteorder == 'little':
+            b = b[::-1]
+
+        result = int(b.encode('hex'), 16)
+        if signed and (result & (1 << (len(b) * 8 - 1))):
+            result -= 1 << (len(b) * 8)
+
+        return result
+    return int.from_bytes(b, byteorder=byteorder, signed=signed)
+
+
 class _BinaryPlistParser:
     """
     Read or write a binary plist file, following the description of the binary
@@ -595,7 +612,10 @@ class _BinaryPlistParser:
     def _get_size(self, tokenL):
         """ return the size of the next object."""
         if tokenL == 0xF:
-            m = self._fp.read(1)[0] & 0x3
+            data = self._fp.read(1)[0]
+            if six.PY2:
+                data = bytes_to_int(data)
+            m = data & 0x3
             s = 1 << m
             f = '>' + _BINARY_FORMAT[s]
             return struct.unpack(f, self._fp.read(s))[0]
@@ -609,7 +629,7 @@ class _BinaryPlistParser:
         else:
             if not size or len(data) != size * n:
                 raise InvalidFileException()
-            return tuple(int.from_bytes(data[i: i + size], 'big')
+            return tuple(bytes_to_int(data[i: i + size], 'big')
                          for i in range(0, size * n, size))
 
     def _read_refs(self, n):
@@ -627,6 +647,8 @@ class _BinaryPlistParser:
         offset = self._object_offsets[ref]
         self._fp.seek(offset)
         token = self._fp.read(1)[0]
+        if six.PY2:
+            token = bytes_to_int(token)
         tokenH, tokenL = token & 0xF0, token & 0x0F
 
         if token == 0x00:
@@ -645,7 +667,7 @@ class _BinaryPlistParser:
             result = b''
 
         elif tokenH == 0x10:  # int
-            result = int.from_bytes(self._fp.read(1 << tokenL),
+            result = bytes_to_int(bytes(self._fp.read(1 << tokenL)),
                                     'big', signed=tokenL >= 3)
 
         elif token == 0x22: # real
@@ -678,7 +700,7 @@ class _BinaryPlistParser:
 
         elif tokenH == 0x80:  # UID
             # used by Key-Archiver plist files
-            result = UID(int.from_bytes(self._fp.read(1 + tokenL), 'big'))
+            result = UID(bytes_to_int(self._fp.read(1 + tokenL), 'big'))
 
         elif tokenH == 0xA0:  # array
             s = self._get_size(tokenL)
@@ -721,7 +743,13 @@ def _count_to_size(count):
     else:
         return 8
 
+
 _scalars = (str, int, float, datetime.datetime, bytes)
+
+def binary_to_hex(binary_data):
+    import codecs
+    # 使用 codecs 模块将二进制数据编码为十六进制表示
+    return codecs.encode(binary_data, 'hex').decode('utf-8')
 
 class _BinaryPlistWriter (object):
     def __init__(self, fp, sort_keys, skipkeys):
@@ -730,7 +758,6 @@ class _BinaryPlistWriter (object):
         self._skipkeys = skipkeys
 
     def write(self, value):
-
         # Flattened object list:
         self._objlist = []
 
@@ -889,7 +916,11 @@ class _BinaryPlistWriter (object):
             self._fp.write(value.data)
 
         elif isinstance(value, (bytes, bytearray)):
-            self._write_size(0x40, len(value))
+            if PY2 and is_printable(value):
+                # python2中字符串也是bytes类型
+                self._write_size(0x50, len(value))
+            else:
+                self._write_size(0x40, len(value))
             self._fp.write(value)
 
         elif isinstance(value, str):
@@ -899,7 +930,6 @@ class _BinaryPlistWriter (object):
             except UnicodeEncodeError:
                 t = value.encode('utf-16be')
                 self._write_size(0x60, len(t) // 2)
-
             self._fp.write(t)
 
         elif isinstance(value, UID):

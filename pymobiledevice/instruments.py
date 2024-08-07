@@ -21,6 +21,7 @@ import re
 import struct
 import threading
 import weakref
+import six
 from packaging.version import Version
 from collections import defaultdict, namedtuple
 
@@ -161,6 +162,7 @@ class DTXPayload:
         }) # yapf: disable
         return pheader + aux_data + sel_data
 
+    @staticmethod
     def build_empty():
         """ flags: 0x00
         Returns:
@@ -326,7 +328,11 @@ class AUXMessageBuffer(object):
     def append_obj(self, obj):
         self._extend(struct.pack("II", 10, 2))
         if isinstance(obj, (bytes, bytearray)):
-            buf = obj
+            if six.PY2:
+                # python2时，这里是字符串
+                buf = bplist.objc_encode(obj)
+            else:
+                buf = obj
         else:
             buf = bplist.objc_encode(obj)
         self._extend(struct.pack("I", len(buf)))
@@ -338,7 +344,15 @@ class AUXMessageBuffer(object):
     #     else:
     #         self.append_obj(v)
 
-class DTXService:
+
+import codecs
+
+def binary_to_hex(binary_data):
+    # 使用 codecs 模块将二进制数据编码为十六进制表示
+    return codecs.encode(binary_data, 'hex').decode('utf-8')
+
+
+class DTXService(object):
     def __init__(self, conn):
         self._conn = conn
         self.prepare()
@@ -793,7 +807,7 @@ class ServiceInstruments(DTXService):
             cli = self.lockdown.startService("com.apple.instruments.remoteserver")
             if hasattr(cli.sock, '_sslobj'):
                 cli.sock._sslobj = None
-        super().__init__(cli)
+        super(ServiceInstruments, self).__init__(cli)
 
     def app_launch(self, bundle_id, app_env={}, args=[]):
         """

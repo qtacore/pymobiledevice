@@ -330,7 +330,7 @@ class NSNull(NSBaseObject):
 
     def __new__(cls):
         if not NSNull._instance:
-            NSNull._instance = super().__new__(cls)
+            NSNull._instance = super(NSNull, cls).__new__(cls)
         return NSNull._instance
 
     def __bool__(self):

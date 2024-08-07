@@ -500,8 +500,7 @@ class XCUITestRunner(object):
         aux = AUXMessageBuffer()
         aux.append_obj(session_identifier)
         aux.append_obj(str(session_identifier) + '-6722-000247F15966B083')
-        aux.append_obj(
-            '/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild')
+        aux.append_obj('/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild')
         aux.append_obj(XCODE_VERSION)
         result = x2.call_message(x2_deamon_chan, identifier, aux)
         if "NSError" in str(result):
@@ -598,4 +597,4 @@ class XCUITestRunner(object):
 if __name__ == '__main__':
     bundle_id = 'com.tencent.testsolar.xctagent.xctrunner.xctrunner'
     runner = XCUITestRunner()
-    runner.runwda(target_bundle_id=bundle_id)
+    runner.runwda(fuzzy_bundle_id="com.tencent.testsolar.*.xctrunner", target_bundle_id=bundle_id)
