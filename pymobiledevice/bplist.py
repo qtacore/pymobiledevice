@@ -8,7 +8,7 @@ import uuid
 import pprint
 import datetime
 from typing import Any, Union, List
-from .plistlib import (loads, dumps, FMT_BINARY, UID) # yapf: disable
+from .util.plistlib2 import (loads, dumps, FMT_BINARY, UID) # yapf: disable
 
 class DecodeNotSupportedError(Exception):
     pass
