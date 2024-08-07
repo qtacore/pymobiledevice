@@ -30,7 +30,7 @@ import platform
 import re
 
 from pymobiledevice.plist_service import PlistService
-from pymobiledevice.ca import ca_do_everything
+from pymobiledevice.util.ca import ca_do_everything
 from pymobiledevice.util import readHomeFile, writeHomeFile
 from pymobiledevice.usbmux import usbmux
 

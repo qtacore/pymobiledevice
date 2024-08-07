@@ -6,6 +6,7 @@ import uuid
 import dataclasses
 from dataclasses import dataclass
 import typing
+import fnmatch
 from typing import Optional
 
 from .util import bplist
@@ -115,6 +116,19 @@ class XCUITestRunner(object):
         else:
             conn = self._lockdown.startService("com.apple.testmanagerd.lockdown")
         return DTXService(conn)
+
+    def _fnmatch_find_bundle_id(self, bundle_id: str) -> str:
+        bundle_ids = []
+        for binfo in self._installation.iter_installed(attrs=['CFBundleIdentifier']):
+            if fnmatch.fnmatch(binfo['CFBundleIdentifier'], bundle_id):
+                bundle_ids.append(binfo['CFBundleIdentifier'])
+        if not bundle_ids:
+            raise MuxError("No app matches", bundle_id)
+
+        # use irma first
+        bundle_ids.sort(
+            key=lambda v: v != 'com.facebook.wda.irmarunner.xctrunner')
+        return bundle_ids[0]
 
     def _launch_wda_app(self,
             bundle_id: str,
@@ -464,8 +478,24 @@ class XCUITestRunner(object):
 
         logger.info("xctrunner quited with result:\n%s", test_result_str)
 
+    def runwda(self, fuzzy_bundle_id="com.*.xctrunner", target_bundle_id=None,
+               test_runner_env: Optional[dict]=None,
+               test_runner_args: Optional[list]=None,
+               target_app_env: Optional[dict]=None,
+               target_app_args: Optional[list]=None,
+               tests_to_run: Optional[set]=None):
+        """ Alias of xcuitest """
+        bundle_id = self._fnmatch_find_bundle_id(fuzzy_bundle_id)
+        logger.info("BundleID: %s", bundle_id)
+        return self.xcuitest(bundle_id, target_bundle_id=target_bundle_id,
+                             test_runner_env=test_runner_env,
+                             test_runner_args=test_runner_args,
+                             target_app_env=target_app_env,
+                             target_app_args=target_app_args,
+                             tests_to_run=tests_to_run)
+
 
 if __name__ == '__main__':
     bundle_id = 'com.tencent.testsolar.xctagent.xctrunner.xctrunner'
     runner = XCUITestRunner()
-    runner.xcuitest(bundle_id, bundle_id)
+    runner.runwda(target_bundle_id=bundle_id)
