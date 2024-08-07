@@ -1,27 +1,22 @@
 ## run xcuitest
 ## https://github.com/alibaba/taobao-iphone-device/blob/main/tidevice/_device.py#L921
 import logging
-import os
 import threading
-import time
 import uuid
 import dataclasses
 from dataclasses import dataclass
 import typing
-from typing import Iterator, Optional, Union
-from distutils.version import LooseVersion
+from typing import Optional
 
-from . import bplist, plistlib2
-from .dtx import DTXEnum
+from . import bplist
 from .installation_proxy import installation_proxy as InstallationProxy
 from .house_arrest import HouseArrestService
-from .testmanagerd import TestManagerdLockdown
-from .bpylist2 import archive, XCTestConfiguration, NSURL, NSUUID
-from .dtx_msg import RawObj
 from .lockdown import LockdownClient
 from .instruments import DTXService
-from .instruments import (AUXMessageBuffer, DTXMessage, DTXPayload, DTXService, Event,
-                           ServiceInstruments)
+from .instruments import (
+    AUXMessageBuffer, DTXMessage,
+    DTXPayload, DTXService,
+    Event, ServiceInstruments)
 from .exceptions import MuxError
 from .installation_proxy import installation_proxy as InstallationProxy
 
@@ -36,9 +31,7 @@ def alias_field(name: str) -> dataclasses.Field:
     return dataclasses.field(metadata={"alias": name})
 
 
-
 class _BaseInfo:
-
     def _asdict(self) -> dict:
         """ for simplejson """
         return self.__dict__.copy()
@@ -124,13 +117,13 @@ class XCUITestRunner(object):
         return DTXService(conn)
 
     def _launch_wda_app(self,
-                    bundle_id: str,
-                    session_identifier: uuid.UUID,
-                    xctest_configuration: bplist.XCTestConfiguration,
-                    quit_event: threading.Event = None,
-                    test_runner_env: Optional[dict] = None,
-                    test_runner_args: Optional[list] = None
-                ) -> typing.Tuple[ServiceInstruments, int]:  # pid
+            bundle_id: str,
+            session_identifier: uuid.UUID,
+            xctest_configuration: bplist.XCTestConfiguration,
+            quit_event: threading.Event = None,
+            test_runner_env: Optional[dict] = None,
+            test_runner_args: Optional[list] = None
+        ) -> typing.Tuple[ServiceInstruments, int]:  # pid
         app_info = self._installation.find_bundle_id(bundle_id)
         sign_identity = app_info.get("SignerIdentity", "")
         logger.info("SignIdentity: %r", sign_identity)
