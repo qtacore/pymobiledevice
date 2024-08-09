@@ -71,7 +71,6 @@ class installation_proxy(object):
         self.service.sendPlist(cmd)
         print("%s : %s\n" % (cmd, self.watch_completion(handler, *args)))
 
-
     def uninstall(self,bundleID, options=None, handler=None, *args):
         self.send_cmd_for_bid(bundleID, "Uninstall", options, handler, args)
 
@@ -84,35 +83,27 @@ class installation_proxy(object):
         self.service.sendPlist(cmd)
         print("%s : %s\n" % (cmd, self.watch_completion(handler, args)))
 
-
     def install(self,ipaPath, options=None, handler=None, *args):
         return self.install_or_upgrade(ipaPath, "Install", client_options, handler, args)
 
-
     def upgrade(self,ipaPath, options=None, handler=None, *args):
         return self.install_or_upgrade(ipaPath, "Upgrade", client_options, handler, args)
-
 
     def apps_info(self):
         self.service.sendPlist({"Command": "Lookup"})
         return self.service.recvPlist().get('LookupResult')
 
-
     def archive(self,bundleID, options=None, handler=None, *args):
         self.send_cmd_for_bid(bundleID, "Archive", options, handler, args)
-
 
     def restore_archive(self,bundleID, options=None, handler=None, *args):
         self.send_cmd_for_bid(bundleID, "Restore", client_options, handler, args)
 
-
     def remove_archive(self,bundleID, options={}, handler=None, *args):
         self.send_cmd_for_bid(bundleID, "RemoveArchive", options, handler, args)
 
-
     def archives_info(self):
         return self.service.sendRequest({"Command": "LookupArchive"}).get("LookupResult")
-
 
     def search_path_for_bid(self, bid):
         path = None
@@ -121,11 +112,14 @@ class installation_proxy(object):
                 path = a.get("Path")+"/"+a.get("CFBundleExecutable")
         return path
 
-
-    def get_apps(self,appTypes=["User"]):
+    def get_apps(self, appTypes=["User"]):
         return [app for app in self.apps_info().values()
                 if app.get("ApplicationType") in appTypes]
 
+    def find_bundle_id(self, bundle_id):
+        for app in self.get_apps():
+            if app.get('CFBundleIdentifier') == bundle_id:
+                return app
 
     def print_apps(self, appType=["User"]):
         for app in self.get_apps(appType):
@@ -134,12 +128,29 @@ class installation_proxy(object):
                                       app.get("Path") if app.get("Path")
                                       else app.get("Container"))).encode('utf-8'))
 
-
-    def get_apps_bid(self,appTypes=["User"]):
+    def get_apps_bid(self, appTypes=["User"]):
         return [app["CFBundleIdentifier"]
                 for app in self.get_apps()
                 if app.get("ApplicationType") in appTypes]
 
+    def iter_installed(self, appType= "User", attrs=None):
+        options = {}
+        if appType:
+            options["ApplicationType"] = appType
+        if attrs:
+            options['ReturnAttributes'] = attrs
+
+        self.service.sendPlist({
+            "Command": "Browse",
+            "ClientOptions": options,
+        })
+
+        while True:
+            data = self.service.recvPlist()
+            if data['Status'] == 'Complete':
+                break
+            for appinfo in data['CurrentList']:
+                yield appinfo
 
     def close(self):
         self.service.close()
