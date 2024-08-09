@@ -595,6 +595,6 @@ class XCUITestRunner(object):
 
 
 if __name__ == '__main__':
-    bundle_id = 'com.tencent.testsolar.xctagent.xctrunner.xctrunner'
+    bundle_id = 'com.tencent.testsolar.xctagent.xctrunner'
     runner = XCUITestRunner()
-    runner.runwda(fuzzy_bundle_id="com.tencent.testsolar.*.xctrunner", target_bundle_id=bundle_id)
+    runner.runwda(fuzzy_bundle_id=bundle_id)
