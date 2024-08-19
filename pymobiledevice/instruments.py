@@ -805,8 +805,8 @@ class ServiceInstruments(DTXService):
             cli = self.lockdown.startService("com.apple.instruments.remoteserver.DVTSecureSocketProxy")
         else:
             cli = self.lockdown.startService("com.apple.instruments.remoteserver")
-            if hasattr(cli.sock, '_sslobj'):
-                cli.sock._sslobj = None
+            if hasattr(cli.s, '_sslobj'):
+                cli.s._sslobj = None
         super(ServiceInstruments, self).__init__(cli)
 
     def app_launch(self, bundle_id, app_env={}, args=[]):
