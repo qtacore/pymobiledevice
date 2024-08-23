@@ -1,4 +1,4 @@
-M2Crypto==0.32.0
+M2Crypto
 construct>=2.9.29
 pyasn1
 future
